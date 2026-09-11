@@ -65,4 +65,26 @@ class Current:
     ) -> np.ndarray:
         # TODO: Replace this placeholder with your current model.
         # Default: no current.
-        return np.zeros(6)
+        
+        beta = self.beta
+
+        if self.beta_end is not None and self.duration > 0.0:
+            fraction = np.clip(t / self.duration, 0.0, 1.0)
+            beta = self.beta + fraction * (self.beta_end - self.beta)
+
+        if self.semantics == "from":
+            beta += np.pi
+        elif self.semantics != "towards":
+            raise ValueError("semantics must be 'towards' or 'from'")
+
+        v_north = self.speed * np.cos(beta)
+        v_east = self.speed * np.sin(beta)
+
+        return np.array([
+            v_north,
+            v_east,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ])
