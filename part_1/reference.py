@@ -69,17 +69,24 @@ class ReferenceModel:
         # self.acc_ref = np.zeros(6)
         # return self.eta_ref, self.nu_ref, self.acc_ref
 
-        eta_cmd = np.asarray(eta_cmd, dtype=float).reshape(6) #Convert commanded setpoint to a six-element numpy array
+        #Converting commanded setpoint to a six-element numpy array
+        eta_cmd = np.asarray(eta_cmd, dtype=float).reshape(6) 
 
-        for i in [0, 1]: #applying the reference model to the north and east axes
-            error = eta_cmd[i] - self.eta_ref[i] #calculating the error between the commanded and current reference position
+        #applying the reference model to the north and east axes
+        for i in [0, 1]: 
+            #calculating the error between the commanded and current reference position
+            error = eta_cmd[i] - self.eta_ref[i] 
 
+            #computing reference acceleration using the second-order reference model
             self.acc_ref[i] = (self.cfg_xy.wn**2 * error 
-                               - 2*self.cfg_xy.zeta * self.cfg_xy.wn * self.nu_ref[i]) #computing reference acc using the second-order reference model
+                               - 2*self.cfg_xy.zeta * self.cfg_xy.wn * self.nu_ref[i]) 
 
-            self.nu_ref[i] += self.acc_ref[i] * dt #integrating acc to update reference velocity
+            #integrating acceleration to update reference velocity
+            self.nu_ref[i] += self.acc_ref[i] * dt 
 
-            self.eta_ref[i] += self.nu_ref[i] * dt #integrating velocity to update reference position
+            #integrating velocity to update reference position
+            self.eta_ref[i] += self.nu_ref[i] * dt 
+
 
         #calculating the shortest heading error in the range [-pi, pi]
         psi_error = np.arctan2(
@@ -87,7 +94,7 @@ class ReferenceModel:
             np.cos(eta_cmd[5] - self.eta_ref[5])
         )
 
-        #computing heading reference acc
+        #computing heading reference acceleration
         self.acc_ref[5] = (
             self.cfg_psi.wn**2 * psi_error
             - 2 * self.cfg_psi.zeta* self.cfg_psi.wn * self.nu_ref[5]
