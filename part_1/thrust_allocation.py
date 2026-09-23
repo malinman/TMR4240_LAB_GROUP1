@@ -25,7 +25,6 @@ class ThrustAllocator:
         u_now: Optional[np.ndarray] = None,
         alpha_now: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        n = len(self.thrusters)
 
         # Desired 3-DOF wrench: [Fx, Fy, Mz]
         tau = tau_d[[0, 1, 5]]
