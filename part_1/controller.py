@@ -56,25 +56,25 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
     """
 
     def __init__(self, *args, **kwargs): #self refererer til den kontrolleren som akkurat nå benyttes 
-        self.Kp_x = 1000 #surge-fram/bak
-        self.Kp_y = 1000 #sway-sideveis
-        self.Kp_psi = 1000 #yaw-rotasjon
-        #dette er foreløpige proportional gains, det forteller oss hvor kraftig controlleren skal reagere på feil i surge, sway og yaw
+        self.Kp_x = 3500 #surge-fram/bak
+        self.Kp_y = 5000 #sway-sideveis
+        self.Kp_psi = 200000 #yaw-rotasjon
+        #proportional gains, det forteller oss hvor kraftig controlleren skal reagere på feil i surge, sway og yaw
 
-        #forløpige derivative gains
-        self.Kd_x = 1000
-        self.Kd_y = 1000
-        self.Kd_psi = 1000
+        #derivative gains
+        self.Kd_x = 60000
+        self.Kd_y = 60000
+        self.Kd_psi = 50000
         #D-gain ser på hvor fort båten beveger seg, og bramser hvis det går veldig raskt
 
-        #foreløpige integral gains
+        #integral gains
         self.Ki_x = 10
-        self.Ki_y = 10
-        self.Ki_psi = 10
+        self.Ki_y = 15
+        self.Ki_psi = 600
         #I-gains skal fjerne små feil som blir værende, feks strøm som presser konstant
 
-        #foreløpig antiwindup
-        self.Kaw = 1
+        #antiwindup
+        self.Kaw = 0.00005
 
         #integral states
         self.int_ned = np.zeros(2) #skal etterhvert lagre hvor mye feil som bygger seg opp i north og east
@@ -83,9 +83,6 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
 
         self.tau_unsat = np.zeros(6)
 
-    #def reset(self) -> None:
-        #"""Optional: reset internal states (integrators, filters) before a run."""
-        #pass
 
     def reset(self) -> None:
         """Reset integrator states before a new simulation run."""
@@ -113,8 +110,14 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
         delta_force_ned = np.dot(R, delta_force_body)
 
         # back-calculation exactly according to the assignment equation
-        self.int_ned += self.Kaw * delta_force_ned * dt
-        self.int_psi += self.Kaw * delta_tau[5] * dt
+        force_mismatch = np.linalg.norm(delta_force_body)
+
+        if force_mismatch > 10000.0:
+            Kaw_active = 0.0003
+        else:
+            Kaw_active = self.Kaw
+
+        self.int_ned += Kaw_active * delta_force_ned * dt
    
 
     #def compute kalles for hvert tidssteg i simuleringen
@@ -128,7 +131,7 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
         nu_ref: np.ndarray | None = None,
         acc_ref: np.ndarray | None = None,
     ) -> np.ndarray:
-        #TODOReplace this placeholder with your DP controller.
+    
         #faktiske posisjoner i NED (north,east,down)
         N = eta[0] #posisjon nord/sør
         E = eta[1] #posisjon øst/vest
@@ -163,7 +166,9 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
         #samler posisjonsfeil over tid til I-leddet
         self.int_ned[0] += e_N * dt
         self.int_ned[1] += e_E * dt
-        self.int_psi += e_psi * dt
+        if abs(e_psi) < np.deg2rad(20.0):
+            self.int_psi += e_psi * dt
+        
         #dette gjør at hvis båten feks ligger 1 meter feil i nord i 1 sekund så vil integralet bygge opp 1mx1s. hvis feilen fortsetter blir integralet større, dette gjør at kontrolleren etterhvert kan gi ekstra kraft for å fjerne en liten fiel som har ligget dær lenge, feks pga konstant strøm eller vind.
         #controlleren "husker over tid", brukes senere til å gi ekstra kraft hvis det er en konstant forstyrrelse
 
@@ -225,6 +230,13 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
         I_psi = self.Ki_psi * self.int_psi 
         #ser på feil over tid, kontrolleren ber gradvis om mer kraft helt til den konstante feilen forsvinner
 
+        # Lagrer PID-leddene separat for logging i simulatoren
+        self.last_pid_body = {
+            "P": np.array([P_x, P_y, 0.0, 0.0, 0.0, P_psi]),
+            "I": np.array([I_x, I_y, 0.0, 0.0, 0.0, I_psi]),
+            "D": np.array([D_x, D_y, 0.0, 0.0, 0.0, D_psi]),
+        }
+
         #total ønsket kraft/moment fra PID-kontorller, dette er selve PID-kontrolleren
         Fx = P_x + I_x + D_x
         Fy = P_y + I_y + D_y
@@ -242,6 +254,5 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
 
         return tau_d
     
-        # Return the (6,) desired BODY wrench — fill in tau_d[0] = Fx,
-        # tau_d[1] = Fy, tau_d[5] = Mz and leave the rest zero.
+  
     
