@@ -93,6 +93,10 @@ class Wind:
         self.tau_slow = float(tau_slow)
         self.seed = seed
 
+        self.rng = np.random.default_rng(seed)
+        self.slow_component = 0.0
+        self.alpha_deg, self.C6 = load_wind_coefficients()
+
     def step(
         self,
         t: float,
@@ -102,6 +106,70 @@ class Wind:
     ) -> Tuple[np.ndarray, Dict[str, float]]:
         # TODO: Replace this placeholder with your wind load model.
         # Default: no wind loads.
-        tau_w6 = np.zeros(6)
-        info = {"U": 0.0, "beta_ned": 0.0, "alpha_body": 0.0}
+        
+        # Slowly-varying wind
+        if self.sigma_slow > 0.0 and self.tau_slow > 0.0 and dt > 0.0:
+            a = np.exp(-dt / self.tau_slow)
+            self.slow_component = (
+                a * self.slow_component
+                + self.sigma_slow * np.sqrt(1.0 - a**2) * self.rng.standard_normal()
+            )
+        else:
+            self.slow_component = 0.0
+
+        U = max(0.0, self.mean_speed + self.slow_component)
+
+        # 'from' to 'towards'(wind from north = blowing south)
+        beta_ned = self.beta
+
+        if self.semantics == "from":
+            beta_ned += np.pi
+        elif self.semantics != "towards":
+            raise ValueError("semantics must be 'from' or 'towards'")
+
+        beta_ned = beta_ned % (2.0 * np.pi)
+
+        # Wind vector
+
+        V_wind_ned = np.array([
+            U * np.cos(beta_ned),
+            U * np.sin(beta_ned)
+        ])
+
+        # Transform NED wind velocity to BODY frame
+
+        psi = eta[5]
+
+        c = np.cos(psi)
+        s = np.sin(psi)
+
+        V_wind_body = np.array ([
+            c * V_wind_ned[0] + s * V_wind_ned[1],
+            -s * V_wind_ned[0] + c * V_wind_ned[1]
+        ])
+
+        # Relative wind in BODY frame
+        V_rw_body = V_wind_body - nu[:2]
+
+        U_rw = np.linalg.norm(V_rw_body)
+        alpha_body = np.arctan2(V_rw_body[1], V_rw_body[0])
+
+        # Interpolate wind coefficients
+        alpha_interp_deg = np.degrees(alpha_body) % 360.0
+
+        C = np.array([
+            np.interp(alpha_interp_deg, self.alpha_deg, self.C6[:, i])
+            for i in range(6)
+        ])
+
+        # Generalized BODY-frame wind loads
+
+        tau_w6 = U_rw**2 * C
+
+        info = {
+            "U": U,
+            "beta_ned": beta_ned,
+            "alpha_body": alpha_body,
+        }
+
         return tau_w6, info
