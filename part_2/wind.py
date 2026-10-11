@@ -133,6 +133,24 @@ class Wind:
         self.dir_limit = float(dir_limit)
         self.seed = seed
 
+        self.rng = np.random.default_rng(seed)
+        self.slow_component = 0.0
+        self.direction_component = 0.0
+        self.alpha_deg, self.C6 = load_wind_coefficients()
+
+        # Harris wind gust spectrum
+        self.gust_L = float(self.gust_params.get("L", 1800.0))
+        self.gust_kappa = float(self.gust_params.get("kappa", 0.0026))
+        self.gust_N = max(2, int(self.gust_params.get("N", 500)))
+
+        self.gust_f = np.linspace(0.001, 0.5, self.gust_N)
+        self.gust_df = self.gust_f[1] - self.gust_f[0]
+
+        # Random phases, fixed throughout the simulation
+        self.gust_phases = self.rng.uniform(
+            0.0, 2 * np.pi, self.gust_N
+        )
+
     def step(
         self,
         t: float,
@@ -142,6 +160,66 @@ class Wind:
     ) -> Tuple[np.ndarray, Dict[str, float]]:
         # TODO: Replace this placeholder with your wind load model.
         # Default: no wind loads.
+        
+        if self.sigma_slow > 0 and self.tau_slow > 0 and dt > 0:
+            a = np.exp(-dt / self.tau_slow)
+            self.slow_component = (
+                a * self.slow_component
+                + self.sigma_slow * np.sqrt(1 - a**2)
+                * self.rng.standard_normal()
+            )
+
+        U_mean = max(0.0, self.mean_speed + self.slow_component)
+
+        # Harris wind gusts
+        U_gust = 0.0
+
+        if self.gust and U_mean > 0:
+            f = self.gust_f
+            L = self.gust_L
+            kappa = self.gust_kappa
+
+            # Harris wind spectrum
+            S = (4 * kappa * L * U_mean) / (
+                (2 + (L * f / U_mean)**2)**(5 / 6)
+            )
+
+            # Sum of harmonic components
+            amplitudes = np.sqrt(2 * S * self.gust_df)
+
+            U_gust = np.sum(
+            amplitudes * np.cos(
+                    2 * np.pi * f * t + self.gust_phases
+                )
+            )
+
+        # Total wind speed
+        U = max(0.0, U_mean + U_gust)
+
+        # Slowly varying wind direction
+        if self.sigma_dir > 0 and self.tau_dir > 0 and dt > 0:
+            a_dir = np.exp(-dt / self.tau_dir)
+            self.direction_component = (
+             a_dir * self.direction_component
+                + self.sigma_dir * np.sqrt(1 - a_dir**2)
+                * self.rng.standard_normal()
+            )
+
+        # Limit direction variation to +/- 5 degrees
+        self.direction_component = np.clip(
+            self.direction_component,
+            -min(self.dir_limit, np.deg2rad(5.0)),
+            min(self.dir_limit, np.deg2rad(5.0))
+        )
+
+        # Convert meteorological "from" direction to "towards"
+        beta_ned = self.beta + self.direction_component
+
+        if self.semantics == "from":
+            beta_ned += np.pi
+
+        beta_ned = beta_ned % (2 * np.pi)
+
         tau_w6 = np.zeros(6)
         info = {"U": 0.0, "beta_ned": 0.0, "alpha_body": 0.0,
                 "U_mean": 0.0, "U_gust": 0.0}
