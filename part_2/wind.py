@@ -220,7 +220,47 @@ class Wind:
 
         beta_ned = beta_ned % (2 * np.pi)
 
-        tau_w6 = np.zeros(6)
-        info = {"U": 0.0, "beta_ned": 0.0, "alpha_body": 0.0,
-                "U_mean": 0.0, "U_gust": 0.0}
+        
+        # Wind velocity in NED coordinates
+        V_wind_ned = np.array([
+            U * np.cos(beta_ned),
+            U * np.sin(beta_ned)
+        ])
+
+        # Transform wind velocity from NED to BODY frame
+        psi = eta[5]
+        c = np.cos(psi)
+        s = np.sin(psi)
+
+        V_wind_body = np.array([
+            c * V_wind_ned[0] + s * V_wind_ned[1],
+            -s * V_wind_ned[0] + c * V_wind_ned[1]
+        ])
+
+        # Relative wind velocity in BODY frame
+        V_rw_body = V_wind_body - nu[:2]
+
+        U_rw = np.linalg.norm(V_rw_body)
+        alpha_body = np.arctan2(V_rw_body[1], V_rw_body[0])
+
+        # Interpolate wind coefficients
+        alpha_interp_deg = np.degrees(alpha_body) % 360.0
+
+        C = np.array([
+            np.interp(alpha_interp_deg, self.alpha_deg, self.C6[:, i])
+            for i in range(6)
+        ])
+
+        # Generalized wind loads in BODY frame
+        tau_w6 = U_rw**2 * C
+
+        # Information for logging and automated checks
+        info = {
+            "U": U,
+            "beta_ned": beta_ned,
+            "alpha_body": alpha_body,
+            "U_mean": U_mean,
+            "U_gust": U_gust
+        }
+
         return tau_w6, info
