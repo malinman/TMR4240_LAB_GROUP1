@@ -12,7 +12,9 @@ observer = NonlinearPassiveObserver()
 
 # Candidate bias gain based on vessel inertia
 M_sym = 0.5 * (observer.M + observer.M.T)
-observer.K3 = 0.001 * M_sym
+observer.K3 = 0.0001 * M_sym
+observer.Tb = np.diag([3000.0, 3000.0, 3000.0])
+observer.Tb_inv = np.linalg.inv(observer.Tb)
 
 print("Test dt:", dt)
 print("Test K3:")
