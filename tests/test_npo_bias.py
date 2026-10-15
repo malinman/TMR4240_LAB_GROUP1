@@ -10,12 +10,6 @@ time = np.arange(0.0, T, dt)
 
 observer = NonlinearPassiveObserver()
 
-# Candidate bias gain based on vessel inertia
-M_sym = 0.5 * (observer.M + observer.M.T)
-observer.K3 = 0.0001 * M_sym
-observer.Tb = np.diag([3000.0, 3000.0, 3000.0])
-observer.Tb_inv = np.linalg.inv(observer.Tb)
-
 print("Test dt:", dt)
 print("Test K3:")
 print(observer.K3)
@@ -34,6 +28,11 @@ b_true = np.array([1000.0, 500.0, 5000.0])
 bias_estimates = []
 position_errors = []
 velocity_errors = []
+
+true_positions = []
+estimated_positions = []
+true_velocities = []
+estimated_velocities = []
 
 for t in time:
     #No commanded control force
@@ -63,6 +62,21 @@ for t in time:
     eta_measured[[0, 1, 5]] = eta + wave
 
     tau_6d = np.zeros(6)
+    
+    y = eta_measured[[0, 1, 5]]
+    y_hat = observer.eta_hat + observer.Cw @ observer.xi_hat
+    innovation = y - y_hat
+    innovation[2] = (innovation[2] + np.pi) % (2 * np.pi) - np.pi
+
+    measurement_correction = observer.K2 @ innovation
+    velocity_contribution = observer.rotation_matrix(
+    observer.eta_hat[2]
+    ) @ observer.nu_hat
+
+    if abs(t - 300.0) < dt / 2:
+        print("Velocity contribution:", velocity_contribution)
+        print("Measurement correction:", measurement_correction)
+
     result = observer.step(t, dt, eta_measured, tau_6d)
 
     eta_hat = result.eta[[0, 1, 5]]
@@ -72,10 +86,18 @@ for t in time:
     bias_estimates.append(b_hat.copy())
     position_errors.append(eta_hat - eta)
     velocity_errors.append(nu_hat - nu)
+    true_positions.append(eta.copy())
+    estimated_positions.append(eta_hat.copy())
+    true_velocities.append(nu.copy())
+    estimated_velocities.append(nu_hat.copy())
 
 bias_estimates = np.array(bias_estimates)
 position_errors = np.array(position_errors)
 velocity_errors = np.array(velocity_errors)
+true_positions = np.array(true_positions)
+estimated_positions = np.array(estimated_positions)
+true_velocities = np.array(true_velocities)
+estimated_velocities = np.array(estimated_velocities)
 
 #Compare true and estimated environmental bias
 fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
@@ -120,3 +142,38 @@ print(
     "Velocity RMSE:",
     np.sqrt(np.mean(velocity_errors**2, axis=0))
 )
+
+# Compare true and estimated LF position
+fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+
+labels = ["North [m]", "East [m]", "Heading [rad]"]
+
+for j, ax in enumerate(axes):
+    ax.plot(time, true_positions[:, j], label="True")
+    ax.plot(time, estimated_positions[:, j], label="NPO estimate")
+    ax.set_ylabel(labels[j])
+    ax.grid(True)
+    ax.legend()
+
+axes[-1].set_xlabel("Time [s]")
+fig.suptitle("NPO - Position and Heading Estimation")
+plt.tight_layout()
+
+
+# Compare true and estimated body-fixed velocity
+fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+
+labels = ["Surge [m/s]", "Sway [m/s]", "Yaw rate [rad/s]"]
+
+for j, ax in enumerate(axes):
+    ax.plot(time, true_velocities[:, j], label="True")
+    ax.plot(time, estimated_velocities[:, j], label="NPO estimate")
+    ax.set_ylabel(labels[j])
+    ax.grid(True)
+    ax.legend()
+
+axes[-1].set_xlabel("Time [s]")
+fig.suptitle("NPO - Velocity Estimation")
+plt.tight_layout()
+
+plt.show()
