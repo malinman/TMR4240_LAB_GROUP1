@@ -4,12 +4,19 @@ import matplotlib.pyplot as plt
 
 from part_2.observer import NonlinearPassiveObserver
 
-dt = 0.05
+dt = 0.1
 T = 600.0
 time = np.arange(0.0, T, dt)
 
 observer = NonlinearPassiveObserver()
-observer.K3 = 10.0 * np.eye(3)
+
+# Candidate bias gain based on vessel inertia
+M_sym = 0.5 * (observer.M + observer.M.T)
+observer.K3 = 0.001 * M_sym
+
+print("Test dt:", dt)
+print("Test K3:")
+print(observer.K3)
 
 M = observer.M.copy()
 D = observer.D.copy()

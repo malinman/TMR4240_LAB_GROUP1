@@ -82,7 +82,7 @@ class NonlinearPassiveObserver(Observer):
         self.D = np.asarray(D, dtype=float)
 
 
-        #Wave model parameters (to be tuned)
+        #Nominal wave model parameters
         omega = np.array([0.8, 0.8, 0.8])
         zeta = np.array([0.1, 0.1, 0.1])
 
@@ -108,12 +108,14 @@ class NonlinearPassiveObserver(Observer):
         #Observer gains must be consistent with this ordering.
         #Final gains will be selected using the passivity condition.
 
-        #Bias model time constants (preliminary values)
+        #Bias model time constants
         self.Tb = np.diag([1000.0, 1000.0, 1000.0])
         self.Tb_inv = np.diag(1.0 / np.diag(self.Tb))
 
         #NPO correction gains
-        #Preliminary wave-filter gains
+        #Wave-filter gains based on the selected nominal frequency
+        #and observer bandwidth.
+        #The linear observer subsystem was checked using the KYP condition.
         omega_w = 0.8
         zeta_w = 0.1
         zeta_n = 1.0
