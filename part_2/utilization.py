@@ -36,9 +36,23 @@ def thrust_utilization(logs, thrusters) -> np.ndarray:
     all active thrusters (``ThrusterConfig.u_max``).  Return one value per
     time sample, shape ``(len(logs.t),)``.
     """
-    raise NotImplementedError(
-        "implement thrust_utilization() in part_2/utilization.py — the "
-        "definition is in the project text (Part 2, Simulation 5)")
+    # raise NotImplementedError(
+    #    "implement thrust_utilization() in part_2/utilization.py — the "
+    #    "definition is in the project text (Part 2, Simulation 5)")
+
+    
+    """Calculate instantaneous thrust utilisation [%]."""
+
+    actual_thrust = np.asarray(logs.u, dtype=float)
+
+    total_thrust = np.sum(np.abs(actual_thrust), axis=1)
+
+    max_thrust = sum(thruster.u_max for thruster in thrusters)
+
+    if max_thrust <= 0:
+        raise ValueError("Total maximum thrust must be positive")
+
+    return 100.0 * total_thrust / max_thrust
 
 
 def average_utilization(logs, thrusters, t_from: float | None = None) -> float:
@@ -48,6 +62,20 @@ def average_utilization(logs, thrusters, t_from: float | None = None) -> float:
     TODO (students): implement — the time average of
     :func:`thrust_utilization` over the evaluation window.
     """
-    raise NotImplementedError(
-        "implement average_utilization() in part_2/utilization.py — the "
-        "definition is in the project text (Part 2, Simulation 5)")
+    # raise NotImplementedError(
+    #    "implement average_utilization() in part_2/utilization.py — the "
+    #    "definition is in the project text (Part 2, Simulation 5)")
+
+    """Calculate average thrust utilisation over the evaluation window."""
+
+    utilization = thrust_utilization(logs, thrusters)
+
+    if t_from is None:
+        t_from = 0.5 * logs.t[-1]
+
+    mask = logs.t >= t_from
+
+    if not np.any(mask):
+        raise ValueError("No time samples in evaluation window")
+
+    return float(np.mean(utilization[mask]))
