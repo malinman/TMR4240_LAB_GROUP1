@@ -242,11 +242,175 @@ class KalmanFilterObserver(Observer):
     name = "kalman"
 
     def __init__(self, *args, **kwargs):
-        pass
+        from models.gunnerus_3dof import Gunnerus3DOF #hente fartøysparametere til EKF-modell fra R/V Gunnerus
+        vessel = Gunnerus3DOF()
 
-    def step(self, t, dt, eta_measured, tau_est):
-        # TODO: implement the Kalman filter or extended Kalman filter.
-        return self._placeholder(eta_measured)
+        #massematrise og lineær demping
+        self.M = vessel._v._Mrb + vessel._v._Ma
+        self.Minv = np.linalg.inv(self.M) #Invers massematrise
+        self.D = vessel._v._Dl #Dempingsmatrise
+
+        #EKF state vector, tilstansvektor med 15 elementer:
+        #x[0:6] = 6 bølgetilstander
+        #x[6:9] = nord, øst og heading (lavfrekvente)
+        #x[9:12] = surge, sway og yaw rate
+        #x[12:15] = miljøbias i nord, øst og yaw
+        self.x = np.zeros(15) #tilstandsvektor med 15 elementer, (zeros lager matrise kun med nullere)
+        self.P0 = np.eye(15) #P0 forklare kor usikker vi e ved oppstart, 15x15, (eye lager en identitetsmatrise)
+        #miljøbias: nord- og øst kraft, og yaw-moment, vi kjenne ikke miljøbias ved oppstart, og gir derfor disse tilstandene stor usikkerhet
+        self.P0[12, 12] = 5000**2
+        self.P0[13, 13] = 5000**2
+        self.P0[14, 14] = 500000.0 ** 2  
+        self.P = self.P0.copy() #P er usikkkerheten som oppdateres underveis 
+        self.Q = np.eye(15) #Q er usikkerheten i prosessmodellen
+        #Bølgemodellen får prosesstøy i aksellerasjonene
+        self.Q[0:6, 0:6] = np.zeros((6, 6))
+        self.Q[3:6, 3:6] = np.diag([5.0,5.0,5.0])
+        self.Q[9:12, 9:12] = np.eye(3) * 1e-8  #Gir lav prosessusikkerhet til hastigheten
+        #prosessusikkerhet for miljøbias i nord, øst og yaw
+        self.Q[12, 12] = 1000 
+        self.Q[13, 13] = 1000
+        self.Q[14, 14] = 100000
+        #ANTATT måleusikkerhet for nord, øst og heading
+        sigma_pos = 0.5  #Antatt standardavvik for posisjon [m]
+        sigma_psi = np.deg2rad(2.0)  #Antatt standardavvik for heading [rad]
+
+        self.R = np.diag([sigma_pos**2,sigma_pos**2,sigma_psi**2 ])  #R e måleusikkerheten skrevvet som varians
+
+        self.H = np.zeros((3,15)) #H beskriv hvilke tilstander vi kan måle
+        #Målt posisjon = bølgebevegelse + lavfrekvent posisjon
+        self.H[0:3, 0:3] = np.eye(3) #de tre første e bølgeutslag i nord, øst og heading
+        self.H[0:3, 6:9] = np.eye(3) #lavfrekvent posisjon og heading
+
+        #paramnetere for bølgemodellen
+        self.omega_w = 0.8 #naturlig frekvens [rad/s], foreløpig eks verdi MÅ TUNES
+        self.zeta_w = 0.1 #dempingsforholdet til bølgemodellen, foreløpig eks verid MÅ tunes
+
+        #tidskonstanter for langsomt varierende miljøbias
+        self.Tb = np.diag([1000, 1000, 1000])
+        self.Tb_inv = np.linalg.inv(self.Tb)
+
+        #lage bølgemodellen Aw
+        I3 = np.eye(3) #identitetsmatrise for nord, øst og heading
+        self.Aw = np.zeros((6, 6)) #matrise som beskriver kordan de seks bølgetilstandene utvikler seg
+        self.Aw[0:3, 3:6] = I3 #bølgeposisjon endres med bølgehastigheten
+        self.Aw[3:6, 0:3] = -(self.omega_w**2) * I3 #bølgedynamikkens tilbareførende ledd
+        self.Aw[3:6, 3:6] = -2*self.zeta_w*self.omega_w*I3 #demping av bølgebevegelsen  
+
+    def reset(self, eta0=None):
+        self.x = np.zeros(15) #nullstiller tilstandsvektor før ny simulerig
+        self.P = self.P0.copy() #nullstiller kovarians/usikkerheten før ny simulering
+
+        if eta0 is not None: #hvis startposisjonen e kjent, bruker vi den
+            self.x[6:9] = np.array(eta0)[[0, 1, 5]] #North, East, Heading
+
+    def rotation_matrix(self, psi):
+        #Rotasjonsmatrise fra BODY-koordinater til NED-koordinater
+        c = np.cos(psi)
+        s = np.sin(psi)
+
+        return np.array([[c, -s, 0],[s,  c, 0],[0,  0, 1]])
+
+    def process_model(self, x, tau): #bergner endrignshastighetene til de 15 tilstandene
+        # Henter de ulike tilstandene fra tilstandsvektoren
+        xi = x[0:6]       #Bølgebevegelse
+        eta = x[6:9]      #posisjon og heading
+        nu = x[9:12]      #Hastighet i BODY-koordinater
+        bias = x[12:15]   #Miljøbias i NED-koordinater
+
+        J = self.rotation_matrix(eta[2]) #Beregner rotasjonsmatrisen ut fra estimert heading
+        xi_dot = np.dot(self.Aw, xi) #Beregner endringen i bølgetilstandene
+        eta_dot = np.dot(J, nu) #Beregner endringen i posisjon og heading
+
+        #fartøyets bevegelsesligning: M * nu_dot = tau - D * nu + J.T * bias
+        damping = np.dot(self.D, nu)
+        environmental_force = np.dot(J.T, bias)
+        total_force = tau - damping + environmental_force
+        nu_dot = np.dot(self.Minv, total_force)
+        bias_dot = -np.dot(self.Tb_inv, bias) #miljeøbias avtar sakte
+
+        return np.concatenate([xi_dot, eta_dot, nu_dot, bias_dot]) #Samler alle endringene i én vektor med 15 elementer
+
+    def jacobian(self, x, tau): #jacobian beskrver kordan modellen påvirkes når tilstandene endres litt
+        #heading, hastighet og miljøbias
+        psi = x[8]
+        nu = x[9:12]
+        bias = x[12:15]
+
+        c = np.cos(psi)
+        s = np.sin(psi)
+
+        J = self.rotation_matrix(psi) #rotasjonsmatrise
+
+        dJ = np.array([[-s, -c, 0],[ c, -s, 0],[ 0,  0, 0]]) #deriverte av rotasjonsmatrisen
+
+        F = np.zeros((15, 15)) #tom 15x15 jacobimatrise
+        F[0:6, 0:6] = self.Aw #hvordan bølgene påvirker hverandre
+        F[6:9, 8] = np.dot(dJ, nu) #hvordan heading påvirker posisjonsendringen
+        F[6:9, 9:12] = J #hvordan hastighet påvirker posisjonsendringen
+        heading_effect = np.dot(dJ.T, bias) #hvordan heading påvirker aksellerajsone
+        F[9:12, 8] = np.dot(self.Minv, heading_effect)
+        F[9:12, 9:12] = -np.dot(self.Minv, self.D) #hvordan demping påvirker aksellerasjonen
+        F[9:12, 12:15] = np.dot(self.Minv, J.T) #hvordan miljøbias påvirker aksellerasjonen
+        F[12:15, 12:15] = -self.Tb_inv #utviklking av miljøbias over tid
+
+        return F
+
+    def step(self, t, dt, eta_measured, tau_est): #ett EKF steg: først prediksjon->korreksjon
+
+        tau = np.array(tau_est)[[0, 1, 5]] #hente kontrollkraft og moment for surge, sway og yaw
+        x_dot = self.process_model(self.x, tau) #regenr hvor raskt tilstander endrer seg
+        x_pred = self.x + dt*x_dot #forutsier neste tilstand Euler-metoden
+
+        F = self.jacobian(self.x,tau) #bergner Jacobi-matrisen ved den nåværende tilstandden
+        Fd = np.eye(15) + dt*F #diskretiserer jacobimatrisen vha Euler-mdetoden
+
+        #diskret prosessusikkerhet
+        FQ = np.dot(F, self.Q) 
+        Qd = (self.Q * dt + 0.5*dt**2 * (FQ + FQ.T) + (dt**3 / 3) * np.dot(FQ, F.T))
+
+        #forutsier usikkerhet ved neste steg
+        P_pred = np.dot(Fd, self.P)
+        P_pred = np.dot(P_pred, Fd.T) + Qd 
+
+        y = np.array(eta_measured)[[0, 1, 5]] # Henter målt North, East og heading
+        y_pred = np.dot(self.H, x_pred)#Beregner hva EKF forventer at målingen skal vær i den predikerte tilstanden
+        innovation = y - y_pred #Beregner forskjellen mellom målt og forventet verdi
+        #Sørger for at heading feilen ligger mellom -pi og pi
+        innovation[2] = (innovation[2] - np.pi) % (2*np.pi) - np.pi
+        if innovation[2] <= -np.pi:
+            innovation[2] += 2*np.pi  
+
+        #beregner usikkerheten i måleforskjellen
+        S = np.dot(self.H, P_pred)
+        S = np.dot(S, self.H.T) + self.R 
+
+        #bergne Kalman-forsterkningen
+        K = np.dot(P_pred,self.H.T) 
+        K = np.dot(K, np.linalg.inv(S))
+
+        #Korrigerer vha målingen
+        correction = np.dot(K, innovation)
+        self.x = x_pred + correction
+        self.x[8] = (self.x[8] + np.pi) % (2*np.pi) - np.pi #estimert heading må ligge mellom -pi og pi
+
+        #oppdaterer usikkerheten etter korreksjonen
+        I = np.eye(15)
+        A = I - np.dot(K, self.H)
+        part_1 = np.dot(A, P_pred)
+        part1 = np.dot(part_1, A.T)
+        part_2 = np.dot(K, self.R)
+        part2 = np.dot(part_2, K.T)
+        self.P = part1 + part2
+
+        #lage 6 elementvektorer som simulatoren forventer
+        eta_est = np.zeros(6)
+        nu_est = np.zeros(6)
+        bias_est = np.zeros(6)
+        eta_est[[0, 1, 5]] = self.x[6:9] #fyller inn nord, øst og heading
+        nu_est[[0, 1, 5]] = self.x[9:12] #fyller inn surge, sway og yaw rate
+        bias_est[[0, 1, 5]] = self.x[12:15] #fyller inn estimert miljøbias
+        return ObserverEstimate(eta=eta_est, nu=nu_est, bias=bias_est) #sender estimatene tilbake til simulatoren
 
 
 def select_observer(kind: str, **kwargs) -> Observer:
