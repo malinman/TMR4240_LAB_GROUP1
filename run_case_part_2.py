@@ -466,12 +466,107 @@ def sim6():
     return logs
 
 
+SIM7_DIRECTIONS_DEG = (0.0, 120.0)            # head sea vs. most demanding direction in Sim 5
+SIM7_WIND_SPEEDS = (8.0, 12.0, 16.0, 20.0, 24.0)
+
+
+def _sim7_metrics(dir_deg, wind_speed, logs, u_max, t0=300.0):
+    """Metrics over the second half of the run (t >= t0)."""
+    dt = logs.t[1] - logs.t[0]
+    k = np.ones(int(round(30.0 / dt)))
+    k /= k.size
+    lf_N = np.convolve(logs.eta[:, 0], k, "same")
+    lf_E = np.convolve(logs.eta[:, 1], k, "same")
+    lf_P = _wrap(np.convolve(np.unwrap(logs.eta[:, 5]), k, "same"))
+
+    m_lf = (logs.t >= t0) & (logs.t <= logs.t[-1] - 15.0)   # skip edge of 30 s mean
+    m = logs.t >= t0
+
+    lf_pos = np.hypot(lf_N[m_lf] - logs.cmd[m_lf, 0], lf_E[m_lf] - logs.cmd[m_lf, 1])
+    lf_psi = np.degrees(np.abs(_wrap(lf_P[m_lf] - logs.cmd[m_lf, 5])))
+
+    u = np.abs(logs.u[m])
+    UT = 100.0 * u.sum(axis=1) / u_max.sum()
+    at_limit = u >= 0.98 * u_max
+    res = (logs.tau_d - logs.tau_thr)[m][:, [0, 1, 5]]
+    rms = lambda x: float(np.sqrt(np.mean(np.square(x))))
+
+    return dict(dir=dir_deg, U=wind_speed,
+                lf_pos=float(lf_pos.max()), lf_psi=float(lf_psi.max()),
+                UT_mean=float(UT.mean()), UT_max=float(UT.max()),
+                sat_any=100.0 * float(np.mean(at_limit.any(axis=1))),
+                sat_tunnel=100.0 * float(np.mean(at_limit[:, 0])),
+                res_Fy=rms(res[:, 1]) / 1e3, res_Mz=rms(res[:, 2]) / 1e3)
+
+
 def sim7():
-    """Part 2, Simulation 7 — your own showcase.  Design it, explain it, discuss it."""
-    # TODO (students): replace this with your own scenario.
-    cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=True, observer_type=selected_observer())
-    logs = run(cfg, np.zeros(6), environment())
-    standard_plots(logs, observer=True)
+    """Part 2, Simulation 7 — station-keeping capability versus wind speed,
+    environment from ahead (0 deg) vs. from the most demanding direction in
+    Simulation 5 (120 deg, about 30 deg abaft the beam).
+
+    Hypothesis: with the environment from 120 deg, the sway force and yaw
+    moment must be balanced by the tunnel thruster (32 kN) together with the
+    azimuths, so the thrust limits and the 5 m / 5 deg watch circle are reached
+    at a much lower wind speed than with the environment from ahead.
+    Current (0.2 m/s) and waves (Hs 1.5 m, Tp 8 s) are kept as in Simulation 5
+    and co-linear with the wind, so only the wind speed changes."""
+    u_max = np.array([th.u_max for th in default_thrusters_part_2()])
+    rows = []
+    worst_logs = None
+
+    for dir_deg in SIM7_DIRECTIONS_DEG:
+        direction = np.deg2rad(dir_deg)
+        for wind_speed in SIM7_WIND_SPEEDS:
+            cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=True,
+                                 observer_type=selected_observer())
+            env = (Current(CAP_CURRENT, direction, semantics="from"),
+                   Wind(wind_speed, direction, semantics="from", sigma_slow=0.5, gust=True,
+                        sigma_dir=np.deg2rad(2.0), seed=SEED),
+                   Waves(hs=CAP_HS, tp=CAP_TP, direction=direction, seed=SEED))
+            logs = run(cfg, np.zeros(6), env)
+            r = _sim7_metrics(dir_deg, wind_speed, logs, u_max)
+            rows.append(r)
+            print(f"dir {dir_deg:5.1f} deg, U_w {wind_speed:4.1f} m/s: "
+                  f"LF dev {r['lf_pos']:5.2f} m / {r['lf_psi']:5.2f} deg, "
+                  f"U_T mean {r['UT_mean']:5.1f} % (max {r['UT_max']:5.1f} %), "
+                  f"at limit {r['sat_any']:5.1f} % (tunnel {r['sat_tunnel']:5.1f} %), "
+                  f"residual rms Fy {r['res_Fy']:.2f} kN, Mz {r['res_Mz']:.1f} kNm")
+            if dir_deg == SIM7_DIRECTIONS_DEG[-1] and wind_speed == SIM7_WIND_SPEEDS[-1]:
+                worst_logs = logs
+
+    # Summary figure: metrics versus wind speed for both directions
+    fig, ax = plt.subplots(2, 2, figsize=(11, 7.5), sharex=True)
+    for dir_deg, marker in zip(SIM7_DIRECTIONS_DEG, ("o", "s")):
+        rr = [r for r in rows if r["dir"] == dir_deg]
+        U = [r["U"] for r in rr]
+        lbl = f"from {dir_deg:.0f} deg"
+        ax[0, 0].plot(U, [r["lf_pos"] for r in rr], marker + "-", label=lbl)
+        ax[0, 1].plot(U, [r["lf_psi"] for r in rr], marker + "-", label=lbl)
+        ax[1, 0].plot(U, [r["UT_mean"] for r in rr], marker + "-", label=lbl + " (mean)")
+        ax[1, 0].plot(U, [r["UT_max"] for r in rr], marker + "--", alpha=0.6, label=lbl + " (max)")
+        ax[1, 1].plot(U, [r["sat_tunnel"] for r in rr], marker + "-", label=lbl)
+    ax[0, 0].axhline(CAP_POS_LIMIT, ls="--", color="tab:red", lw=1, label="watch circle")
+    ax[0, 1].axhline(CAP_PSI_LIMIT_DEG, ls="--", color="tab:red", lw=1, label="watch circle")
+    ax[0, 0].set_ylabel("max LF position dev. [m]")
+    ax[0, 1].set_ylabel("max LF heading dev. [deg]")
+    ax[1, 0].set_ylabel("thrust utilisation $U_T$ [%]")
+    ax[1, 1].set_ylabel("time with tunnel at max thrust [%]")
+    for a in ax.flat:
+        a.grid(alpha=0.3)
+        a.legend(fontsize=8)
+    for a in ax[1]:
+        a.set_xlabel("mean wind speed $U_w$ [m/s]")
+    fig.suptitle("Simulation 7 — capability vs. wind speed "
+                 "(current 0.2 m/s, Hs 1.5 m, Tp 8 s, co-linear; evaluation t = 300-600 s)")
+    fig.tight_layout()
+
+    # Time histories of the most demanding case
+    if worst_logs is not None:
+        plot_dashboard(worst_logs)
+        plt.gcf().suptitle(f"Simulation 7 — from {SIM7_DIRECTIONS_DEG[-1]:.0f} deg, "
+                           f"U_w = {SIM7_WIND_SPEEDS[-1]:.0f} m/s")
+        plot_wrench_residual(worst_logs)
+        plot_thruster_setpoints(worst_logs)
 
     #lagre bildene direkte
     output_dir = Path("simulation_results") / "sim7"
@@ -480,7 +575,7 @@ def sim7():
     for i, fig_num in enumerate(plt.get_fignums(), start=1):
         fig = plt.figure(fig_num)
         fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
-    return logs
+    return rows
 
 
 def bonus_sensor_noise():
