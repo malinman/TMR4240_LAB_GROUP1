@@ -365,6 +365,18 @@ def sim5(step_deg: float = 10.0):
     result = capability_sweep(run_direction, thrusters, step_deg=step_deg,
                               pos_limit=CAP_POS_LIMIT, psi_limit_deg=CAP_PSI_LIMIT_DEG,
                               deviation="lf")
+
+    # Save the raw sweep result before plotting, so the long run is never lost
+    import pickle
+    result_dir = Path("simulation_results") / "sim5"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(result_dir / "sim5_result.pkl", "wb") as f:
+            pickle.dump(result, f)
+        print(f"Saved sweep result to {result_dir / 'sim5_result.pkl'}")
+    except Exception as exc:
+        print(f"Could not pickle the sweep result: {exc}")
+
     plot_capability(result, total_limits=(CAP_TOTAL_POS_LIMIT, CAP_TOTAL_PSI_LIMIT_DEG))
 
     #lagre bildene direkte
@@ -377,12 +389,72 @@ def sim5(step_deg: float = 10.0):
     return result
 
 
+def _wrap(a):
+    return np.arctan2(np.sin(a), np.cos(a))
+
+
+def print_sim6_metrics(label, logs, t0, t1):
+    """Station-keeping, estimation and actuator metrics over [t0, t1]."""
+    dt = logs.t[1] - logs.t[0]
+    m = (logs.t >= t0) & (logs.t <= t1)
+    # observer metrics: skip the last 15 s (edge effect of the 30 s mean)
+    mo = m & (logs.t <= logs.t[-1] - 15.0)
+
+    # station keeping (true state vs set-point)
+    pos = np.hypot(logs.eta[m, 0] - logs.cmd[m, 0], logs.eta[m, 1] - logs.cmd[m, 1])
+    psi = np.degrees(np.abs(_wrap(logs.eta[m, 5] - logs.cmd[m, 5])))
+
+    # low-frequency truth = 30 s moving average of the true pose
+    k = np.ones(int(round(30.0 / dt)))
+    k /= k.size
+    lf_N = np.convolve(logs.eta[:, 0], k, "same")
+    lf_E = np.convolve(logs.eta[:, 1], k, "same")
+    lf_P = _wrap(np.convolve(np.unwrap(logs.eta[:, 5]), k, "same"))
+
+    eN = logs.eta_est[mo, 0] - lf_N[mo]
+    eE = logs.eta_est[mo, 1] - lf_E[mo]
+    eP = np.degrees(_wrap(logs.eta_est[mo, 5] - lf_P[mo]))
+    wN = logs.eta_measured[mo, 0] - lf_N[mo]
+    wE = logs.eta_measured[mo, 1] - lf_E[mo]
+    wP = np.degrees(_wrap(logs.eta_measured[mo, 5] - lf_P[mo]))
+    e_nu = logs.nu_est[mo][:, [0, 1, 5]] - logs.nu[mo][:, [0, 1, 5]]
+
+    # actuators
+    u = logs.u[m]
+    UT = 100.0 * np.sum(np.abs(u), axis=1) / 192_000.0
+    du = np.diff(u, axis=0) / dt
+    res = (logs.tau_d - logs.tau_thr)[m][:, [0, 1, 5]]
+
+    rms = lambda x: float(np.sqrt(np.mean(np.square(x))))
+    print(f"\n=== {label} ===")
+    print(f"  position error   max {pos.max():5.2f} m   rms {rms(pos):5.2f} m")
+    print(f"  heading error    max {psi.max():5.2f} deg rms {rms(psi):5.2f} deg")
+    print(f"  LF estimate err  rms N {rms(eN):.2f} m, E {rms(eE):.2f} m, psi {rms(eP):.2f} deg")
+    print(f"  WF ratio (est/meas std, lower = better filtering)  "
+          f"N {np.std(eN)/np.std(wN):.2f}, E {np.std(eE)/np.std(wE):.2f}, psi {np.std(eP)/np.std(wP):.2f}")
+    print(f"  velocity err rms u {rms(e_nu[:, 0]):.3f} m/s, v {rms(e_nu[:, 1]):.3f} m/s, "
+          f"r {np.degrees(rms(e_nu[:, 2])):.3f} deg/s")
+    print(f"  thrust utilisation mean {UT.mean():5.1f} %   max {UT.max():5.1f} %")
+    print(f"  thrust rate rms [kN/s]  T {rms(du[:, 0])/1e3:.2f}, A1 {rms(du[:, 1])/1e3:.2f}, A2 {rms(du[:, 2])/1e3:.2f}")
+    print(f"  residual rms     Fx {rms(res[:, 0])/1e3:.2f} kN, Fy {rms(res[:, 1])/1e3:.2f} kN, "
+          f"Mz {rms(res[:, 2])/1e3:.2f} kNm")
+
+
 def sim6():
     """Part 2, Simulation 6 — observer robustness: heavy sea, station keeping 1000 s,
     SELECTED_OBSERVER in the loop."""
     cfg = Part2SimConfig(dt=DT, T=1000.0, use_observer=True, observer_type=selected_observer())
     logs = run(cfg, np.zeros(6), environment(hs=ROBUST_HS, tp=ROBUST_TP))
-    standard_plots(logs, observer=True)
+    standard_plots(logs, setpoints=True, observer=True)
+
+    # Design-sea reference with the same observer and controller (= Sim 4c),
+    # evaluated over a window of the same length (500 s) as the heavy-sea run
+    cfg_ref = Part2SimConfig(dt=DT, T=600.0, use_observer=True, observer_type=selected_observer())
+    logs_ref = run(cfg_ref, np.zeros(6), environment())
+
+    print_sim6_metrics("Design sea  Hs 1.5 m, Tp 8 s   (t = 100-600 s)", logs_ref, 100.0, 600.0)
+    print_sim6_metrics("Heavy sea   Hs 2.5 m, Tp 10 s  (t = 500-1000 s)", logs, 500.0, 1000.0)
+    print_sim6_metrics("Heavy sea, full stress run     (t = 0-1000 s)", logs, 0.0, 1000.0)
 
     #lagre bildene direkte
     output_dir = Path("simulation_results") / "sim6"
