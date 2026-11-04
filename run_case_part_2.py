@@ -28,6 +28,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
 from part_2.config import Part2SimConfig, default_thrusters_part_2
 from part_2.controller import DPController
@@ -71,7 +72,7 @@ SEED = 123
 # there first, then set this to "nonlinear_passive" or "kalman" and justify
 # the choice in the report.  It is None until you choose: every preset that
 # needs it stops with a message instead of picking one for you.
-SELECTED_OBSERVER = None
+SELECTED_OBSERVER = "nonlinear_passive"
 
 # Initial observer error used by the convergence demonstration in Part 2,
 # Simulation 4.  The engine resets every observer at the TRUE initial pose, so
@@ -210,6 +211,26 @@ def sim2():
                          use_observer=False, thruster_dynamics=True)
     logs = run(cfg, four_corner_commands(cfg, hold),
                environment(current=False, wind=False, waves=False))
+    
+#dette er for å lage en test figur
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+
+    axes[0].plot(logs.t, logs.cmd[:, 0], "--", label="Commanded North")
+    axes[0].plot(logs.t, logs.sp[:, 0], label="Reference North")
+    axes[0].set_ylabel("North [m]")
+    axes[0].legend()
+    axes[0].grid(True)
+
+    axes[1].plot(logs.t, logs.cmd[:, 1], "--", label="Commanded East")
+    axes[1].plot(logs.t, logs.sp[:, 1], label="Reference East")
+    axes[1].set_ylabel("East [m]")
+    axes[1].set_xlabel("Time [s]")
+    axes[1].legend()
+    axes[1].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+#her stopper test figuren
     standard_plots(logs, setpoints=True)
     return logs
 
@@ -226,6 +247,13 @@ def sim3():
     cfg = Part2SimConfig(dt=DT, T=5 * hold, use_observer=False)
     logs = run(cfg, four_corner_commands(cfg, hold), environment())
     standard_plots(logs, setpoints=True, environment_plots=True)
+    #lagre bildene dirkete
+    output_dir = Path("simulation_results") / "sim3"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig_num in enumerate(plt.get_fignums(), start=1):
+        fig = plt.figure(fig_num)
+        fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return logs
 
 
@@ -236,6 +264,19 @@ def sim4():
     has something to converge from; (c) closed-loop station keeping with raw
     measurements vs. SELECTED_OBSERVER."""
     out = {}
+    #lagre bildene dirkete
+    def save_figures():
+        output_dir = Path("simulation_results") / "sim4"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, fig_num in enumerate(plt.get_fignums(), start=1):
+            fig = plt.figure(fig_num)
+            fig.savefig(
+                output_dir / f"figure_{i}.png",
+                dpi=200,
+                bbox_inches="tight"
+            )
+
     fixed = WrenchSequence([(1.0, [2e3, 2e3, 2e3])])
     variants = (("with waves", dict(waves=True)), ("without waves", dict(waves=False)))
     for kind in ("nonlinear_passive", "kalman"):
@@ -270,15 +311,17 @@ def sim4():
               "for stage (c), the raw-vs-observer closed loop."
               "\n(In a notebook, restart the kernel or importlib.reload(rc) first, so the "
               "new value is picked up.)")
+        save_figures()
         return out
     # Closed loop: does the selected observer improve the DP system?
     for label, use_obs in (("raw measurements", False), (f"observer {selected_observer()}", True)):
         cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=use_obs,
-                             observer_type=selected_observer())
+                             observer_type=selected_observer(), bypass_actuators=True)
         logs = run(cfg, np.zeros(6), environment())
         standard_plots(logs, setpoints=True, observer=use_obs)
         plt.gcf().suptitle(f"Closed loop — {label}")
         out[("closed loop", label)] = logs
+    save_figures()
     return out
 
 

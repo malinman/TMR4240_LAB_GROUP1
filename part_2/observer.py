@@ -262,7 +262,8 @@ class KalmanFilterObserver(Observer):
         self.P0[13, 13] = 5000**2
         self.P0[14, 14] = 500000.0 ** 2  
         self.P = self.P0.copy() #P er usikkkerheten som oppdateres underveis 
-        self.Q = np.eye(15) #Q er usikkerheten i prosessmodellen
+        #self.Q = np.eye(15) #Q er usikkerheten i prosessmodellen
+        self.Q = np.zeros((15, 15))
         #Bølgemodellen får prosesstøy i aksellerasjonene
         self.Q[0:6, 0:6] = np.zeros((6, 6))
         self.Q[3:6, 3:6] = np.diag([5.0,5.0,5.0])

@@ -126,9 +126,18 @@ class ThrustAllocator:
         # [Tunnel thrust, Fx1, Fy1, Fx2, Fy2] in kN
         z = cp.Variable(5)
 
-        # Weighted least-squares objective function
+        """# Weighted least-squares objective function
         residual = W @ (B_e @ z - tau)
-        objective = cp.Minimize(cp.sum_squares(residual))
+        objective = cp.Minimize(cp.sum_squares(residual))"""
+
+
+        # Weighted least-squares objective with a small thrust penalty.
+        # eps * ||z||^2 makes the solution unique (5 unknowns, 3 equations)
+        # and approximates minimum power. eps is small enough that the
+        # wrench residual stays negligible when the demand is feasible.
+        eps = 1e-4
+        residual = W @ (B_e @ z - tau)
+        objective = cp.Minimize(cp.sum_squares(residual) + eps * cp.sum_squares(z))
 
         # Maximum thrust constraints
         constraints = [
@@ -200,7 +209,13 @@ class ThrustAllocator:
         if alpha_now is not None:
 
             # Azimuth thruster 1
-            if np.isclose(u_1, 0.0):
+            """if np.isclose(u_1, 0.0):
+                alpha_1 = alpha_now[1]"""
+            # Azimuth thruster 1
+            # Below u_dead [kN] the angle is held: the direction of a
+            # near-zero thrust is numerical noise and not worth slewing for.
+            u_dead = 0.5
+            if abs(u_1) < u_dead:
                 alpha_1 = alpha_now[1]
             else:
                 rotation_1 = normalize_angle(alpha_1 - alpha_now[1])
@@ -213,7 +228,9 @@ class ThrustAllocator:
                     u_1 = -u_1
 
             # Azimuth thruster 2
-            if np.isclose(u_2, 0.0):
+            """if np.isclose(u_2, 0.0):
+                alpha_2 = alpha_now[2]"""
+            if abs(u_2) < u_dead:
                 alpha_2 = alpha_now[2]
             else:
                 rotation_2 = normalize_angle(alpha_2 - alpha_now[2])
