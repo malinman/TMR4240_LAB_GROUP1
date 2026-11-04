@@ -82,6 +82,8 @@ class ThrustAllocator:
 
     def __init__(self, thrusters: List[ThrusterConfig]):
         self.thrusters = thrusters
+        # Last successful solution [kN], used as fallback if the solver fails
+        self.z_prev = np.zeros(5)
 
     def allocate(
         self,
@@ -174,20 +176,24 @@ class ThrustAllocator:
                 + direction_y * Fy_actual >= 0
             )
 
+
         # Solve the constrained WLS problem
         problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.CLARABEL)
+        try:
+            problem.solve(solver=cp.CLARABEL)
+            solved = problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+        except cp.SolverError:
+            solved = False
 
-
-
-
-        # Check if the optimization was successful
-        if problem.status != cp.OPTIMAL:
-            print("Optimization status:", problem.status)
-            raise RuntimeError("Thrust allocation optimization failed")
-
-        # Extract the optimized force components
-        z = z.value
+        if solved:
+            z = z.value
+            self.z_prev = z.copy()
+        else:
+            # Fallback: reuse the previous allocation for this step instead
+            # of stopping the whole simulation
+            print(f"t = {t:.1f} s: allocation status {problem.status}, "
+                  "previous solution reused")
+            z = self.z_prev.copy()
 
         # Extract the individual force components
         u_T = z[0]

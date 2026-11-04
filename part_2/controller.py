@@ -58,19 +58,22 @@ class DPController: #lager oppskrift på kontroller, når programmet senere sier
     def __init__(self, *args, **kwargs): #self refererer til den kontrolleren som akkurat nå benyttes 
         self.Kp_x = 3500 #surge-fram/bak
         self.Kp_y = 5000 #sway-sideveis
-        self.Kp_psi = 200000 #yaw-rotasjon
+        #self.Kp_psi = 200000 #yaw-rotasjon
+        self.Kp_psi = 1.0e6     # was 2e5 -> wn ≈ 0.135 rad/s, well below wave frequency 0.8 rad/s
         #proportional gains, det forteller oss hvor kraftig controlleren skal reagere på feil i surge, sway og yaw
 
         #derivative gains
         self.Kd_x = 60000
         self.Kd_y = 60000
-        self.Kd_psi = 50000
+        #self.Kd_psi = 50000
+        self.Kd_psi = 1.0e7     # was 5e4 -> ζ ≈ 0.8 including hull yaw damping
         #D-gain ser på hvor fort båten beveger seg, og bramser hvis det går veldig raskt
 
         #integral gains
         self.Ki_x = 10
         self.Ki_y = 15
-        self.Ki_psi = 600
+        #self.Ki_psi = 600
+        self.Ki_psi = 1.0e4     # was 600 -> Ki ≈ Kp·wn/10
         #I-gains skal fjerne små feil som blir værende, feks strøm som presser konstant
 
         #antiwindup
