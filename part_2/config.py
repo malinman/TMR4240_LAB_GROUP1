@@ -35,7 +35,7 @@ class RefAxisConfig:
     # TODO (students): none of the three values below is a tuned value — they
     # are placeholders. Choose the natural frequency, the damping ratio and
     # the rate limit yourself, and justify each of them in the report.
-    wn: float = 0.04                     # natural frequency [rad/s] (placeholder) - veriden fra part 1 var 0.45 - endrer til 0.20
+    wn: float = 0.03                   # natural frequency [rad/s] (placeholder)
     zeta: float = 1.0                   # damping ratio [-] (placeholder)
     rate_limit: Optional[float] = None  # max |x_dot| (m/s or rad/s); None = off
 

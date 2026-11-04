@@ -29,7 +29,7 @@ model here directly enables velocity/acceleration feedforward there.
 from typing import Tuple
 import numpy as np
 
-# Per-axis tuning parameters live with the rest of the Part 1 configuration.
+# Per-axis tuning parameters live with the rest of the Part 2 configuration.
 from part_2.config import RefAxisConfig
 
 
@@ -63,49 +63,42 @@ class ReferenceModel:
     def step(
         self, t: float, dt: float, eta_cmd: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        # TODO: Replace this pass-through placeholder with your reference model.
-        # self.eta_ref = np.asarray(eta_cmd, dtype=float).reshape(6).copy()
-        # self.nu_ref = np.zeros(6)
-        # self.acc_ref = np.zeros(6)
-        # return self.eta_ref, self.nu_ref, self.acc_ref
 
-        #Converting commanded setpoint to a six-element numpy array
-        eta_cmd = np.asarray(eta_cmd, dtype=float).reshape(6) 
+        eta_cmd = np.asarray(eta_cmd, dtype=float).reshape(6)
 
-        #applying the reference model to the north and east axes
-        for i in [0, 1]: 
-            #calculating the error between the commanded and current reference position
-            error = eta_cmd[i] - self.eta_ref[i] 
+        for i in [0, 1, 5]:
+            cfg = self.cfg_psi if i == 5 else self.cfg_xy
 
-            #computing reference acceleration using the second-order reference model
-            self.acc_ref[i] = (self.cfg_xy.wn**2 * error 
-                               - 2*self.cfg_xy.zeta * self.cfg_xy.wn * self.nu_ref[i]) 
+            wn = cfg.wn
+            zeta = cfg.zeta
 
-            #integrating acceleration to update reference velocity
-            self.nu_ref[i] += self.acc_ref[i] * dt 
+            error = eta_cmd[i] - self.eta_ref[i]
 
-            #integrating velocity to update reference position
-            self.eta_ref[i] += self.nu_ref[i] * dt 
+            if i == 5:
+                error = np.arctan2(np.sin(error), np.cos(error))
 
+            acc = wn**2 * error - 2.0 * zeta * wn * self.nu_ref[i]
 
-        #calculating the shortest heading error in the range [-pi, pi]
-        psi_error = np.arctan2(
-            np.sin(eta_cmd[5] - self.eta_ref[5]),
-            np.cos(eta_cmd[5] - self.eta_ref[5])
+            self.nu_ref[i] += acc * dt
+
+            if cfg.rate_limit is not None:
+                self.nu_ref[i] = np.clip(
+                    self.nu_ref[i],
+                    -cfg.rate_limit,
+                    cfg.rate_limit
+                )
+
+            self.eta_ref[i] += self.nu_ref[i] * dt
+            self.acc_ref[i] = acc
+
+        self.eta_ref[5] = np.arctan2(
+            np.sin(self.eta_ref[5]),
+            np.cos(self.eta_ref[5])
         )
 
-        #computing heading reference acceleration
-        self.acc_ref[5] = (
-            self.cfg_psi.wn**2 * psi_error
-            - 2 * self.cfg_psi.zeta* self.cfg_psi.wn * self.nu_ref[5]
+        return (
+            self.eta_ref.copy(),
+            self.nu_ref.copy(),
+            self.acc_ref.copy()
         )
-
-        #integrating acc to update reference yaw rate
-        self.nu_ref[5] += self.acc_ref[5] * dt
-
-        #integrating yaw rate to update reference heading
-        self.eta_ref[5] += self.nu_ref[5] * dt
-
-
-        return self.eta_ref, self.nu_ref, self.acc_ref
 
