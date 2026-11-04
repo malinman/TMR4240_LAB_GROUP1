@@ -204,49 +204,34 @@ class ThrustAllocator:
         Fx2 = z[3]
         Fy2 = z[4]
 
-        # Convert Cartesian forces to thrust and azimuth angles
-        u_1 = np.sqrt(Fx1**2 + Fy1**2)
-        alpha_1 = np.arctan2(Fy1, Fx1)
+        # Azimuth commands:
+        # - angle: desired force direction, or the reversed direction if that
+        #   needs less rotation; held at the current angle for small forces
+        #   (below u_dead), where the direction is not worth slewing for.
+        # - thrust: projection of the desired force onto the CURRENT azimuth
+        #   direction. The thruster therefore never pushes in a wrong direction,
+        #   neither in the dead zone nor while slewing, and the force builds up
+        #   as the azimuth turns towards the commanded angle.
+        u_dead = 0.5  # [kN]
+        u_az = []
+        alpha_az = []
+        for j, (Fx, Fy) in enumerate([(Fx1, Fy1), (Fx2, Fy2)], start=1):
+            magnitude = np.hypot(Fx, Fy)
+            a_cmd = np.arctan2(Fy, Fx)
+            a_now = alpha_now[j] if alpha_now is not None else a_cmd
 
-        u_2 = np.sqrt(Fx2**2 + Fy2**2)
-        alpha_2 = np.arctan2(Fy2, Fx2)
+            if magnitude < u_dead:
+                a_cmd = a_now
+            elif (abs(normalize_angle(a_cmd + np.pi - a_now))
+                  < abs(normalize_angle(a_cmd - a_now))):
+                a_cmd = normalize_angle(a_cmd + np.pi)
 
-        # Choose the shortest azimuth rotation
-        if alpha_now is not None:
+            # Signed thrust along the current azimuth direction
+            u_az.append(Fx * np.cos(a_now) + Fy * np.sin(a_now))
+            alpha_az.append(a_cmd)
 
-            # Azimuth thruster 1
-            """if np.isclose(u_1, 0.0):
-                alpha_1 = alpha_now[1]"""
-            # Azimuth thruster 1
-            # Below u_dead [kN] the angle is held: the direction of a
-            # near-zero thrust is numerical noise and not worth slewing for.
-            u_dead = 0.5
-            if abs(u_1) < u_dead:
-                alpha_1 = alpha_now[1]
-            else:
-                rotation_1 = normalize_angle(alpha_1 - alpha_now[1])
-                reverse_rotation_1 = normalize_angle(
-                    alpha_1 + np.pi - alpha_now[1]
-                )
-
-                if abs(reverse_rotation_1) < abs(rotation_1):
-                    alpha_1 = normalize_angle(alpha_1 + np.pi)
-                    u_1 = -u_1
-
-            # Azimuth thruster 2
-            """if np.isclose(u_2, 0.0):
-                alpha_2 = alpha_now[2]"""
-            if abs(u_2) < u_dead:
-                alpha_2 = alpha_now[2]
-            else:
-                rotation_2 = normalize_angle(alpha_2 - alpha_now[2])
-                reverse_rotation_2 = normalize_angle(
-                    alpha_2 + np.pi - alpha_now[2]
-                )
-
-                if abs(reverse_rotation_2) < abs(rotation_2):
-                    alpha_2 = normalize_angle(alpha_2 + np.pi)
-                    u_2 = -u_2
+        u_1, u_2 = u_az
+        alpha_1, alpha_2 = alpha_az
 
         # Create thrust and azimuth commands
         u_cmd = np.array([u_T, u_1, u_2])
