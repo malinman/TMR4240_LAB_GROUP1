@@ -63,8 +63,42 @@ class ReferenceModel:
     def step(
         self, t: float, dt: float, eta_cmd: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        # TODO: Replace this pass-through placeholder with your reference model.
-        self.eta_ref = np.asarray(eta_cmd, dtype=float).reshape(6).copy()
-        self.nu_ref = np.zeros(6)
-        self.acc_ref = np.zeros(6)
-        return self.eta_ref, self.nu_ref, self.acc_ref
+
+        eta_cmd = np.asarray(eta_cmd, dtype=float).reshape(6)
+
+        for i in [0, 1, 5]:
+            cfg = self.cfg_psi if i == 5 else self.cfg_xy
+
+            wn = cfg.wn
+            zeta = cfg.zeta
+
+            error = eta_cmd[i] - self.eta_ref[i]
+
+            if i == 5:
+                error = np.arctan2(np.sin(error), np.cos(error))
+
+            acc = wn**2 * error - 2.0 * zeta * wn * self.nu_ref[i]
+
+            self.nu_ref[i] += acc * dt
+
+            if cfg.rate_limit is not None:
+                self.nu_ref[i] = np.clip(
+                    self.nu_ref[i],
+                    -cfg.rate_limit,
+                    cfg.rate_limit
+                )
+
+            self.eta_ref[i] += self.nu_ref[i] * dt
+            self.acc_ref[i] = acc
+
+        self.eta_ref[5] = np.arctan2(
+            np.sin(self.eta_ref[5]),
+            np.cos(self.eta_ref[5])
+        )
+
+        return (
+            self.eta_ref.copy(),
+            self.nu_ref.copy(),
+            self.acc_ref.copy()
+        )
+
