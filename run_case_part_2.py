@@ -200,6 +200,14 @@ def sim1():
     plot_wind_field(logs)
     plot_current(logs)
     plot_waves(logs)
+
+    #lagre bildene direkte
+    output_dir = Path("simulation_results") / "sim1"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig_num in enumerate(plt.get_fignums(), start=1):
+        fig = plt.figure(fig_num)
+        fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return logs
 
 
@@ -229,9 +237,16 @@ def sim2():
     axes[1].grid(True)
 
     plt.tight_layout()
-    plt.show()
 #her stopper test figuren
     standard_plots(logs, setpoints=True)
+
+    #lagre bildene direkte
+    output_dir = Path("simulation_results") / "sim2"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig_num in enumerate(plt.get_fignums(), start=1):
+        fig = plt.figure(fig_num)
+        fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return logs
 
 
@@ -316,7 +331,7 @@ def sim4():
     # Closed loop: does the selected observer improve the DP system?
     for label, use_obs in (("raw measurements", False), (f"observer {selected_observer()}", True)):
         cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=use_obs,
-                             observer_type=selected_observer(), bypass_actuators=True)
+                             observer_type=selected_observer())
         logs = run(cfg, np.zeros(6), environment())
         standard_plots(logs, setpoints=True, observer=use_obs)
         plt.gcf().suptitle(f"Closed loop — {label}")
@@ -351,6 +366,14 @@ def sim5(step_deg: float = 10.0):
                               pos_limit=CAP_POS_LIMIT, psi_limit_deg=CAP_PSI_LIMIT_DEG,
                               deviation="lf")
     plot_capability(result, total_limits=(CAP_TOTAL_POS_LIMIT, CAP_TOTAL_PSI_LIMIT_DEG))
+
+    #lagre bildene direkte
+    output_dir = Path("simulation_results") / "sim5"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig_num in enumerate(plt.get_fignums(), start=1):
+        fig = plt.figure(fig_num)
+        fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return result
 
 
@@ -360,6 +383,14 @@ def sim6():
     cfg = Part2SimConfig(dt=DT, T=1000.0, use_observer=True, observer_type=selected_observer())
     logs = run(cfg, np.zeros(6), environment(hs=ROBUST_HS, tp=ROBUST_TP))
     standard_plots(logs, observer=True)
+
+    #lagre bildene direkte
+    output_dir = Path("simulation_results") / "sim6"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig_num in enumerate(plt.get_fignums(), start=1):
+        fig = plt.figure(fig_num)
+        fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return logs
 
 
@@ -369,6 +400,14 @@ def sim7():
     cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=True, observer_type=selected_observer())
     logs = run(cfg, np.zeros(6), environment())
     standard_plots(logs, observer=True)
+
+    #lagre bildene direkte
+    output_dir = Path("simulation_results") / "sim7"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, fig_num in enumerate(plt.get_fignums(), start=1):
+        fig = plt.figure(fig_num)
+        fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return logs
 
 

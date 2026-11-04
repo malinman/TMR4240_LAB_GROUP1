@@ -78,7 +78,11 @@ class NonlinearPassiveObserver(Observer):
         if D is None:
             D = np.diag([1.118e3, 2.229e4, 1.950e6])
 
-        self.M = np.asarray(M, dtype=float)
+        #Passivity requires a symmetric positive-definite M. The sway-yaw
+        #added-mass coupling in the vessel data is not symmetric (Appendix B),
+        #so the symmetric part is used.
+        M = np.asarray(M, dtype=float)
+        self.M = 0.5 * (M + M.T)
         self.D = np.asarray(D, dtype=float)
 
 
@@ -115,7 +119,6 @@ class NonlinearPassiveObserver(Observer):
         #NPO correction gains
         #Wave-filter gains based on the selected nominal frequency
         #and observer bandwidth.
-        #The linear observer subsystem was checked using the KYP condition.
         omega_w = 0.8
         zeta_w = 0.1
         zeta_n = 1.0
@@ -124,14 +127,21 @@ class NonlinearPassiveObserver(Observer):
         ka = -2.0 * (zeta_n - zeta_w) * omega_c / omega_w
         kb = 2.0 * omega_w * (zeta_n - zeta_w)
 
+        #Fossen's K1 is derived for the ordering [xi1, xi2] with Cw = [0 I].
+        #Here the ordering is [eta_w, eta_w_dot] with Cw = [I 0], which is the
+        #transformation T = Aw, so the gain becomes Aw @ K1_Fossen.
         self.K1 = np.vstack([
             kb * np.eye(3),
-            -(omega_w**2) * ka * np.eye(3)
+            (-(omega_w**2) * ka - 2.0 * zeta_w * omega_w * kb) * np.eye(3)
         ])
         self.K2 = omega_c * np.eye(3)
-        #Preliminary bias and velocity correction gains
-        self.K3 = 0.02 * np.eye(3)
-        self.K4 = 0.5 * np.eye(3)
+        #Bias and velocity correction gains, scaled with the vessel inertia.
+        #K4 = 0.1 diag(M) gives a velocity correction M^-1 K4 = 0.1 s^-2 per axis.
+        #K3 = 0.1 K4 gives K3/K4 = 0.1 rad/s.
+        #Passivity condition (Fossen): 1/Tb << K3/K4 < omega_w < omega_c
+        #  -> 0.001 << 0.1 < 0.8 < 1.0  (satisfied)
+        self.K4 = 0.1 * np.diag(np.diag(self.M))
+        self.K3 = 0.1 * self.K4
 
 
 
@@ -256,22 +266,29 @@ class KalmanFilterObserver(Observer):
         #x[9:12] = surge, sway og yaw rate
         #x[12:15] = miljøbias i nord, øst og yaw
         self.x = np.zeros(15) #tilstandsvektor med 15 elementer, (zeros lager matrise kun med nullere)
-        self.P0 = np.eye(15) #P0 forklare kor usikker vi e ved oppstart, 15x15, (eye lager en identitetsmatrise)
-        #miljøbias: nord- og øst kraft, og yaw-moment, vi kjenne ikke miljøbias ved oppstart, og gir derfor disse tilstandene stor usikkerhet
+        #Initial covariance P0
+        self.P0 = np.eye(15)
+        self.P0[0:6, 0:6] = 1e-2 * np.eye(6)               #WF states: small at start
+        self.P0[6:9, 6:9] = np.diag([25.0, 25.0, 0.05])     #LF pose: covers 5 m and ~13 deg initial error
+        #miljøbias: vi kjenner ikke miljøbias ved oppstart, og gir derfor disse tilstandene stor usikkerhet
         self.P0[12, 12] = 5000**2
         self.P0[13, 13] = 5000**2
-        self.P0[14, 14] = 500000.0 ** 2  
-        self.P = self.P0.copy() #P er usikkkerheten som oppdateres underveis 
-        #self.Q = np.eye(15) #Q er usikkerheten i prosessmodellen
+        self.P0[14, 14] = 500000.0 ** 2
+        self.P = self.P0.copy() #P er usikkerheten som oppdateres underveis
+
+        #Process noise Q (continuous-time intensities)
         self.Q = np.zeros((15, 15))
-        #Bølgemodellen får prosesstøy i aksellerasjonene
-        self.Q[0:6, 0:6] = np.zeros((6, 6))
-        self.Q[3:6, 3:6] = np.diag([5.0,5.0,5.0])
-        self.Q[9:12, 9:12] = np.eye(3) * 1e-8  #Gir lav prosessusikkerhet til hastigheten
-        #prosessusikkerhet for miljøbias i nord, øst og yaw
-        self.Q[12, 12] = 1000 
-        self.Q[13, 13] = 1000
-        self.Q[14, 14] = 100000
+        #WF model: q = 4 zeta w^3 sigma^2 gives a stationary WF std sigma.
+        #sigma = 0.7 m (N, E) and 1.8 deg (psi), read from the Sim 4 wave motion.
+        self.Q[3:6, 3:6] = np.diag([0.1, 0.1, 2e-4])
+        #LF pose: small random walk, the pose should mainly follow J(psi) nu
+        self.Q[6:9, 6:9] = np.diag([1e-3, 1e-3, 1e-6])
+        #Velocity: unmodelled accelerations (nonlinear damping, Coriolis)
+        self.Q[9:12, 9:12] = np.diag([1e-4, 1e-4, 1e-7])
+        #Bias: ~10 kN (surge/sway) and ~100 kNm (yaw) change over ~100 s
+        self.Q[12, 12] = 1e6
+        self.Q[13, 13] = 1e6
+        self.Q[14, 14] = 1e8
         #ANTATT måleusikkerhet for nord, øst og heading
         sigma_pos = 0.5  #Antatt standardavvik for posisjon [m]
         sigma_psi = np.deg2rad(2.0)  #Antatt standardavvik for heading [rad]
