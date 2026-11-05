@@ -452,7 +452,9 @@ def sim4():
                                  observer_type=kind)
             logs = run(cfg, np.zeros(6), environment(**env_kw), controller=fixed)
             plot_observer(logs).suptitle(f"Observer {kind}, {label}")
-            plot_observer_error(logs).suptitle(f"Observer {kind}, {label} — estimation errors")
+            plot_observer_error_butter(
+                logs, f"Observer {kind}, {label} — estimation errors "
+                      f"(LF truth: Butterworth 0.25 rad/s)")
             out[(kind, label)] = logs
     # Convergence: start the estimate away from the truth (the engine resets it
     # ON the truth), then watch the error decay.  Quote the convergence time.
@@ -465,8 +467,10 @@ def sim4():
         current, wind, waves = environment()
         logs = sim.run(np.zeros(6), current=current, wind=wind, waves=waves)
         plot_observer(logs).suptitle(f"Observer {kind}, offset start — convergence")
-        plot_observer_error(logs).suptitle(
-            f"Observer {kind}, offset start — estimation errors")
+        # edge_start=0: the convergence from the initial offset must be visible
+        plot_observer_error_butter(
+            logs, f"Observer {kind}, offset start — estimation errors "
+                  f"(LF truth: Butterworth 0.25 rad/s)", edge_start=0.0)
         out[(kind, "offset start")] = logs
     # Stage (c) is the only part that needs the choice you make from the
     # evidence above, so it is skipped until you have made it.  Stages (a) and
@@ -485,8 +489,13 @@ def sim4():
         cfg = Part2SimConfig(dt=DT, T=600.0, use_observer=use_obs,
                              observer_type=selected_observer())
         logs = run(cfg, np.zeros(6), environment())
-        standard_plots(logs, setpoints=True, observer=use_obs)
+        standard_plots(logs, setpoints=True)
         plt.gcf().suptitle(f"Closed loop — {label}")
+        if use_obs:
+            plot_observer(logs).suptitle(f"Closed loop — {label}")
+            plot_observer_error_butter(
+                logs, f"Closed loop — {label}, estimation errors "
+                      f"(LF truth: Butterworth 0.25 rad/s)")
         out[("closed loop", label)] = logs
         plot_yaw_diagnostics(logs, f"Sim 4c — yaw controller, {label}")
     save_figures()
@@ -546,31 +555,51 @@ def _wrap(a):
     return np.arctan2(np.sin(a), np.cos(a))
 
 
-def print_sim6_metrics(label, logs, t0, t1):
-    """Station-keeping, estimation and actuator metrics over [t0, t1]."""
-    dt = logs.t[1] - logs.t[0]
-    m = (logs.t >= t0) & (logs.t <= t1)
-    # observer metrics: skip the last 15 s (edge effect of the 30 s mean)
-    mo = m & (logs.t <= logs.t[-1] - 15.0)
+def _butter(x, t, cutoff=0.25, band=None):
+    """4th-order zero-phase Butterworth filter, as in simulation4_metrics_direct.py."""
+    from scipy.signal import butter, sosfiltfilt
+    nyquist = np.pi / float(np.median(np.diff(t)))
+    if band is None:
+        sos = butter(4, cutoff / nyquist, btype="lowpass", output="sos")
+    else:
+        sos = butter(4, np.array(band) / nyquist, btype="bandpass", output="sos")
+    return sosfiltfilt(sos, x, axis=0)
+
+
+def print_sim6_metrics(label, logs, t0, t1, edge=30.0):
+    """Station-keeping, estimation and actuator metrics over [t0, t1].
+    LF truth: 0.25 rad/s Butterworth low-pass of the true motion, identical to
+    simulation4_metrics_direct.py. Estimation metrics exclude `edge` seconds
+    at each end of the window, as in Simulation 4 (0-600 s -> 30-570 s)."""
+    t = logs.t
+    dt = t[1] - t[0]
+    m = (t >= t0) & (t <= t1)
+    mo = m & (t >= t0 + edge) & (t <= t1 - edge)
 
     # station keeping (true state vs set-point)
     pos = np.hypot(logs.eta[m, 0] - logs.cmd[m, 0], logs.eta[m, 1] - logs.cmd[m, 1])
     psi = np.degrees(np.abs(_wrap(logs.eta[m, 5] - logs.cmd[m, 5])))
 
-    # low-frequency truth = 30 s moving average of the true pose
-    k = np.ones(int(round(30.0 / dt)))
-    k /= k.size
-    lf_N = np.convolve(logs.eta[:, 0], k, "same")
-    lf_E = np.convolve(logs.eta[:, 1], k, "same")
-    lf_P = _wrap(np.convolve(np.unwrap(logs.eta[:, 5]), k, "same"))
+    # LF truth (Butterworth) for pose and velocity
+    eta = logs.eta[:, [0, 1, 5]].copy()
+    eta[:, 2] = np.unwrap(eta[:, 2])
+    nu = logs.nu[:, [0, 1, 5]]
+    lf_eta = _butter(eta, t)
+    lf_nu = _butter(nu, t)
 
-    eN = logs.eta_est[mo, 0] - lf_N[mo]
-    eE = logs.eta_est[mo, 1] - lf_E[mo]
-    eP = np.degrees(_wrap(logs.eta_est[mo, 5] - lf_P[mo]))
-    wN = logs.eta_measured[mo, 0] - lf_N[mo]
-    wE = logs.eta_measured[mo, 1] - lf_E[mo]
-    wP = np.degrees(_wrap(logs.eta_measured[mo, 5] - lf_P[mo]))
-    e_nu = logs.nu_est[mo][:, [0, 1, 5]] - logs.nu[mo][:, [0, 1, 5]]
+    est = logs.eta_est[:, [0, 1, 5]].copy()
+    est[:, 2] = np.unwrap(est[:, 2])
+    meas = logs.eta_measured[:, [0, 1, 5]].copy()
+    meas[:, 2] = np.unwrap(meas[:, 2])
+
+    e_pose = est - lf_eta
+    e_pose[:, 2] = _wrap(e_pose[:, 2])
+    e_nu = logs.nu_est[:, [0, 1, 5]] - lf_nu
+    e_nu_tot = logs.nu_est[:, [0, 1, 5]] - nu
+
+    # wave-band attenuation of the estimate relative to the measurement [dB]
+    est_wf = _butter(est, t, band=(0.45, 1.2))
+    meas_wf = _butter(meas, t, band=(0.45, 1.2))
 
     # actuators
     u = logs.u[m]
@@ -579,18 +608,73 @@ def print_sim6_metrics(label, logs, t0, t1):
     res = (logs.tau_d - logs.tau_thr)[m][:, [0, 1, 5]]
 
     rms = lambda x: float(np.sqrt(np.mean(np.square(x))))
-    print(f"\n=== {label} ===")
+    att = [20 * np.log10(max(rms(est_wf[mo, i]), 1e-12) / max(rms(meas_wf[mo, i]), 1e-12))
+           for i in range(3)]
+    print(f"\n=== {label} (estimation metrics over t = {t[mo][0]:.0f}-{t[mo][-1]:.0f} s) ===")
     print(f"  position error   max {pos.max():5.2f} m   rms {rms(pos):5.2f} m")
     print(f"  heading error    max {psi.max():5.2f} deg rms {rms(psi):5.2f} deg")
-    print(f"  LF estimate err  rms N {rms(eN):.2f} m, E {rms(eE):.2f} m, psi {rms(eP):.2f} deg")
-    print(f"  WF ratio (est/meas std, lower = better filtering)  "
-          f"N {np.std(eN)/np.std(wN):.2f}, E {np.std(eE)/np.std(wE):.2f}, psi {np.std(eP)/np.std(wP):.2f}")
-    print(f"  velocity err rms u {rms(e_nu[:, 0]):.3f} m/s, v {rms(e_nu[:, 1]):.3f} m/s, "
-          f"r {np.degrees(rms(e_nu[:, 2])):.3f} deg/s")
+    print(f"  LF estimate err  rms N {rms(e_pose[mo, 0]):.3f} m, E {rms(e_pose[mo, 1]):.3f} m, "
+          f"psi {np.degrees(rms(e_pose[mo, 2])):.3f} deg")
+    print(f"  velocity err rms (vs LF truth)    u {rms(e_nu[mo, 0]):.3f} m/s, "
+          f"v {rms(e_nu[mo, 1]):.3f} m/s, r {np.degrees(rms(e_nu[mo, 2])):.3f} deg/s")
+    print(f"  velocity err rms (vs total truth) u {rms(e_nu_tot[mo, 0]):.3f} m/s, "
+          f"v {rms(e_nu_tot[mo, 1]):.3f} m/s, r {np.degrees(rms(e_nu_tot[mo, 2])):.3f} deg/s")
+    print(f"  wave attenuation [dB] N {att[0]:.1f}, E {att[1]:.1f}, psi {att[2]:.1f}")
     print(f"  thrust utilisation mean {UT.mean():5.1f} %   max {UT.max():5.1f} %")
     print(f"  thrust rate rms [kN/s]  T {rms(du[:, 0])/1e3:.2f}, A1 {rms(du[:, 1])/1e3:.2f}, A2 {rms(du[:, 2])/1e3:.2f}")
     print(f"  residual rms     Fx {rms(res[:, 0])/1e3:.2f} kN, Fy {rms(res[:, 1])/1e3:.2f} kN, "
           f"Mz {rms(res[:, 2])/1e3:.2f} kNm")
+
+def plot_observer_error_butter(logs, title, edge=30.0, edge_start=None):
+    """Estimation errors against the total truth and against the LF truth
+    (4th-order zero-phase Butterworth, 0.25 rad/s), the same LF reference as
+    the tabulated metrics. The LF error is shown without the last `edge`
+    seconds and, unless `edge_start` is given, without the first `edge`
+    seconds, where the filter has edge effects."""
+    t = logs.t
+    eta = logs.eta[:, [0, 1, 5]].copy()
+    eta[:, 2] = np.unwrap(eta[:, 2])
+    est = logs.eta_est[:, [0, 1, 5]].copy()
+    est[:, 2] = np.unwrap(est[:, 2])
+    nu = logs.nu[:, [0, 1, 5]]
+    nu_est = logs.nu_est[:, [0, 1, 5]]
+    lf_eta = _butter(eta, t)
+    lf_nu = _butter(nu, t)
+
+    e_tot = est - eta
+    e_tot[:, 2] = _wrap(e_tot[:, 2])
+    e_lf = est - lf_eta
+    e_lf[:, 2] = _wrap(e_lf[:, 2])
+    v_tot = nu_est - nu
+    v_lf = nu_est - lf_nu
+    t_first = edge if edge_start is None else edge_start
+    m = (t >= t_first) & (t <= t[-1] - edge)
+
+    fig, ax = plt.subplots(3, 2, figsize=(12, 8), sharex=True)
+    pos_labels = ["North error [m]", "East error [m]", "Heading error [deg]"]
+    vel_labels = ["u error [m/s]", "v error [m/s]", "r error [deg/s]"]
+    for i in range(3):
+        sc = np.degrees if i == 2 else (lambda x: x)
+        ax[i, 0].plot(t, sc(e_tot[:, i]), color="tab:blue", alpha=0.35, lw=0.8,
+                      label="estimate - truth")
+        ax[i, 0].plot(t[m], sc(e_lf[m, i]), color="tab:orange", lw=1.2,
+                      label="estimate - LF truth (Butterworth 0.25 rad/s)")
+        ax[i, 0].set_ylabel(pos_labels[i])
+        ax[i, 1].plot(t, sc(v_tot[:, i]), color="tab:blue", alpha=0.35, lw=0.8,
+                      label="estimate - truth")
+        ax[i, 1].plot(t[m], sc(v_lf[m, i]), color="tab:orange", lw=1.2,
+                      label="estimate - LF truth (Butterworth 0.25 rad/s)")
+        ax[i, 1].set_ylabel(vel_labels[i])
+    for a in ax.flat:
+        a.axhline(0.0, color="k", lw=0.5)
+        a.grid(alpha=0.3)
+    ax[0, 0].legend(fontsize=8)
+    ax[0, 1].legend(fontsize=8)
+    ax[2, 0].set_xlabel("Time [s]")
+    ax[2, 1].set_xlabel("Time [s]")
+    fig.suptitle(title)
+    fig.tight_layout()
+    return fig
 
 
 def sim6():
@@ -598,16 +682,21 @@ def sim6():
     SELECTED_OBSERVER in the loop."""
     cfg = Part2SimConfig(dt=DT, T=1000.0, use_observer=True, observer_type=selected_observer())
     logs = run(cfg, np.zeros(6), environment(hs=ROBUST_HS, tp=ROBUST_TP))
-    standard_plots(logs, setpoints=True, observer=True)
+    standard_plots(logs, setpoints=True)
+    plot_observer(logs).suptitle("Observer comparison: nonlinear_passive (heavy sea)")
+    plot_observer_error_butter(
+        logs, "Observer estimation errors: nonlinear_passive, heavy sea "
+              "(LF truth: Butterworth 0.25 rad/s)")
     plot_yaw_diagnostics(logs, "Sim 6 — yaw controller (heavy sea, NPO)")
 
     # Design-sea reference with the same observer and controller (= Sim 4c),
-    # evaluated over a window of the same length (500 s) as the heavy-sea run
+    # evaluated over the same intervals as Simulation 4: station keeping over
+    # 0-600 s, estimation over 30-570 s. Only the sea state differs.
     cfg_ref = Part2SimConfig(dt=DT, T=600.0, use_observer=True, observer_type=selected_observer())
     logs_ref = run(cfg_ref, np.zeros(6), environment())
 
-    print_sim6_metrics("Design sea  Hs 1.5 m, Tp 8 s   (t = 100-600 s)", logs_ref, 100.0, 600.0)
-    print_sim6_metrics("Heavy sea   Hs 2.5 m, Tp 10 s  (t = 500-1000 s)", logs, 500.0, 1000.0)
+    print_sim6_metrics("Design sea  Hs 1.5 m, Tp 8 s   (t = 0-600 s)", logs_ref, 0.0, 600.0)
+    print_sim6_metrics("Heavy sea   Hs 2.5 m, Tp 10 s  (t = 0-600 s)", logs, 0.0, 600.0)
     print_sim6_metrics("Heavy sea, full stress run     (t = 0-1000 s)", logs, 0.0, 1000.0)
 
     #lagre bildene direkte
