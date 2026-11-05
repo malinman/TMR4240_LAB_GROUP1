@@ -314,14 +314,65 @@ def sim4():
     measurements vs. SELECTED_OBSERVER."""
     out = {}
     #lagre bildene dirkete
+
     def save_figures():
         output_dir = Path("simulation_results") / "sim4"
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        observer_name = {
+            "nonlinear_passive": "NPO",
+            "kalman": "EKF",
+        }.get(SELECTED_OBSERVER, str(SELECTED_OBSERVER))
+
+        names = [
+            # Open-loop comparison
+            "sim4_open_loop_NPO_with_waves_estimates",
+            "sim4_open_loop_NPO_with_waves_errors",
+            "sim4_open_loop_NPO_without_waves_estimates",
+            "sim4_open_loop_NPO_without_waves_errors",
+            "sim4_open_loop_EKF_with_waves_estimates",
+            "sim4_open_loop_EKF_with_waves_errors",
+            "sim4_open_loop_EKF_without_waves_estimates",
+            "sim4_open_loop_EKF_without_waves_errors",
+
+            # Open-loop convergence tests
+            "sim4_open_loop_NPO_with_waves_offset_start_estimates",
+            "sim4_open_loop_NPO_with_waves_offset_start_errors",
+            "sim4_open_loop_EKF_with_waves_offset_start_estimates",
+            "sim4_open_loop_EKF_with_waves_offset_start_errors",
+
+            # Closed-loop raw feedback
+            "sim4_closed_loop_raw_feedback_with_waves_dashboard",
+            "sim4_closed_loop_raw_feedback_with_waves_motion",
+            "sim4_closed_loop_raw_feedback_with_waves_trajectory",
+            "sim4_closed_loop_raw_feedback_with_waves_wrench",
+            "sim4_closed_loop_raw_feedback_with_waves_residuals",
+            "sim4_closed_loop_raw_feedback_with_waves_thrusters",
+            "sim4_closed_loop_raw_feedback_with_waves_yaw_diagnostics",
+
+            # Closed-loop observer feedback
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_dashboard",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_motion",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_trajectory",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_wrench",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_residuals",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_thrusters",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_observer_estimates",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_observer_errors",
+            f"sim4_closed_loop_{observer_name}_feedback_with_waves_yaw_diagnostics",
+        ]
+
         for i, fig_num in enumerate(plt.get_fignums(), start=1):
             fig = plt.figure(fig_num)
+
+            filename = (
+                names[i - 1]
+                if i <= len(names)
+                else f"figure_{i}"
+            )
+
             fig.savefig(
-                output_dir / f"figure_{i}.png",
+                output_dir / f"{filename}.png",
                 dpi=200,
                 bbox_inches="tight"
             )
