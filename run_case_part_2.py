@@ -242,6 +242,72 @@ def sim1():
         fig.savefig(output_dir / f"figure_{i}.png", dpi=200, bbox_inches="tight")
     return logs
 
+def print_sim2_rate_limits(logs):
+    """Print actual actuator rates and intervals at the rate limits."""
+    t = np.asarray(logs.t)
+    dt = np.diff(t)
+
+    thrust_rate = (
+        np.diff(logs.u, axis=0) / dt[:, None] / 1000.0
+    )
+
+    delta_angle = np.diff(logs.alpha, axis=0)
+    delta_angle = np.arctan2(
+        np.sin(delta_angle), np.cos(delta_angle)
+    )
+    angle_rate = np.degrees(delta_angle) / dt[:, None]
+
+    def print_result(name, rates, limit, unit):
+        absolute_rate = np.abs(rates)
+        active = np.isclose(
+            absolute_rate, limit, rtol=1e-5, atol=1e-6
+        )
+
+        print(f"\n{name}")
+        print(
+            f"Maximum actual rate: {absolute_rate.max():.4f} {unit}"
+            f" | Limit: {limit:.1f} {unit}"
+        )
+
+        if not np.any(active):
+            print("Rate limit not reached between logged samples.")
+            return
+
+        print(f"Time at rate limit: {np.sum(dt[active]):.2f} s")
+
+        indices = np.flatnonzero(active)
+        groups = np.split(
+            indices, np.flatnonzero(np.diff(indices) > 1) + 1
+        )
+
+        print("Intervals between logged samples:")
+        for group in groups:
+            print(
+                f"  {t[group[0]]:.1f}--"
+                f"{t[group[-1] + 1]:.1f} s"
+            )
+
+    print("\n=== SIMULATION 2: ACTUAL ACTUATOR RATES ===")
+
+    names = ["Tunnel bow", "Azimuth 1", "Azimuth 2"]
+    thrust_limits = [4.0, 10.0, 10.0]
+
+    for j, name in enumerate(names):
+        print_result(
+            f"{name}: thrust rate",
+            thrust_rate[:, j],
+            thrust_limits[j],
+            "kN/s",
+        )
+
+    for j in (1, 2):
+        print_result(
+            f"{names[j]}: azimuth rotation rate",
+            angle_rate[:, j],
+            12.0,
+            "deg/s",
+        )
+
 
 def sim2():
     """Part 2, Simulation 2 — four-corner DP test with constrained Part 2
@@ -251,6 +317,7 @@ def sim2():
                          use_observer=False, thruster_dynamics=True)
     logs = run(cfg, four_corner_commands(cfg, hold),
                environment(current=False, wind=False, waves=False))
+    print_sim2_rate_limits(logs)
     
 #dette er for å lage en test figur
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
