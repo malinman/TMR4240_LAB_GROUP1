@@ -135,13 +135,16 @@ class NonlinearPassiveObserver(Observer):
             (-(omega_w**2) * ka - 2.0 * zeta_w * omega_w * kb) * np.eye(3)
         ])
         self.K2 = omega_c * np.eye(3)
-        #Bias and velocity correction gains, scaled with the vessel inertia.
+         #Bias and velocity correction gains, scaled with the vessel inertia.
         #K4 = 0.1 diag(M) gives a velocity correction M^-1 K4 = 0.1 s^-2 per axis.
-        #K3 = 0.1 K4 gives K3/K4 = 0.1 rad/s.
-        #Passivity condition (Fossen): 1/Tb << K3/K4 < omega_w < omega_c
-        #  -> 0.001 << 0.1 < 0.8 < 1.0  (satisfied)
+        #K3 = 0.035 K4 gives K3/K4 = 0.035 rad/s.
+        #Frequency ordering (Fossen): 1/Tb << K3/K4 < omega_w < omega_c
+        #  -> 0.001 << 0.035 < 0.8 < 1.0
+        #The ordering alone is not sufficient: the error subsystem is strictly
+        #positive real (SPR) only for K3/K4 <= ~0.042 with these omega_w,
+        #zeta_w, zeta_n and omega_c. 0.035 gives a margin to that limit.
         self.K4 = 0.1 * np.diag(np.diag(self.M))
-        self.K3 = 0.1 * self.K4
+        self.K3 = 0.035 * self.K4
 
 
 
