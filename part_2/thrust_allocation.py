@@ -73,7 +73,8 @@ import numpy as np
 from models.thruster_dynamics import ThrusterConfig
 import cvxpy as cp
 
-# Normalize angle to the range [-pi, pi]
+# Pakker en vinkel inn i [-pi, pi), slik at vi kan sammenligne azimuth-vinkler
+# og velge korteste rotasjon
 def normalize_angle(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
 
@@ -82,7 +83,8 @@ class ThrustAllocator:
 
     def __init__(self, thrusters: List[ThrusterConfig]):
         self.thrusters = thrusters
-        # Last successful solution [kN], used as fallback if the solver fails
+        # Forrige gyldige løsning [kN]. Brukes hvis CLARABEL feiler i et
+        # tidssteg, slik at lange kjøringer (Sim 5 har ~2e5 kall) ikke stopper
         self.z_prev = np.zeros(5)
 
     def allocate(
@@ -94,12 +96,16 @@ class ThrustAllocator:
         alpha_now: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
 
-        # Desired 3-DOF wrench: [Fx, Fy, Mz]
+        # Plukk ut surge, sway og yaw fra 6-DOF-vektoren og regn i kN/kNm,
+        # så optimeringsproblemet blir godt skalert
         tau = tau_d[[0, 1, 5]]
-        # Convert desired forces and moment to kN and kNm
         tau = tau / 1000.0
+        # Konfigurasjonsmatrise for z = [tunnel Fy, az1 Fx, az1 Fy, az2 Fx, az2 Fy].
+        # Yaw-raden er momentarmene: tunnelen sitter 12 m foran, azimuthene
+        # 13 m bak og 3 m til hver side (N = x*Fy - y*Fx)
 
-        # Extended configuration matrix
+
+        # Utvidet konfigurasjons matrise
         B_e = np.array([
             [0.0,   1.0,   0.0,   1.0,   0.0],
             [1.0,   0.0,   1.0,   0.0,   1.0],
@@ -109,28 +115,22 @@ class ThrustAllocator:
 
 
 
-        # Maximum thrust for each thruster [kN]
+        # Maks thrust fra thrusterkonfigurasjonen: 32, 80 og 80 kN
         u_max = np.array([thruster.u_max for thruster in self.thrusters])
         u_max = u_max / 1000.0
 
         
 
-        # Weighting matrix for surge, sway and yaw errors
+        # Yaw-feilen er i kNm og deles på L = 13 m for å bli sammenlignbar med
+        # kraftfeilene. Faktoren 10 gir yaw høyere prioritet, slik at heading
+        # holdes og sway-kraften gis opp først når kravet er for stort (Sim 7)
         L = 13.0
-        #W = np.diag([1.0, 1.0, 1.0 / L])
-        # Give yaw error higher priority
-        #W = np.diag([1.0, 1.0, 5.0 / L])
-        # Prioritize yaw accuracy over additional sway force
         W = np.diag([1.0, 1.0, 10.0 / L])
 
         
-        # Optimization variables:
-        # [Tunnel thrust, Fx1, Fy1, Fx2, Fy2] in kN
+        # Optimeringsvariabler i kN: [tunnel Fy, az1 Fx, az1 Fy, az2 Fx, az2 Fy]
         z = cp.Variable(5)
 
-        """# Weighted least-squares objective function
-        residual = W @ (B_e @ z - tau)
-        objective = cp.Minimize(cp.sum_squares(residual))"""
 
 
         # Weighted least-squares objective with a small thrust penalty.
@@ -141,14 +141,17 @@ class ThrustAllocator:
         residual = W @ (B_e @ z - tau)
         objective = cp.Minimize(cp.sum_squares(residual) + eps * cp.sum_squares(z))
 
-        # Maximum thrust constraints
+        # Tunnelen gir bare sideveis kraft, azimuthene kan gi kraft i alle
+        # retninger, så for dem er grensen på lengden av kraftvektoren
         constraints = [
             cp.abs(z[0]) <= u_max[0],
             cp.norm(z[1:3], 2) <= u_max[1],
             cp.norm(z[3:5], 2) <= u_max[2]
         ]
 
-        # Preserve the desired force direction
+        # Når kravet er større enn kapasiteten, skal kraften bli kortere, ikke
+        # snu. Ellers kunne fartøyet bli presset i en helt annen retning enn
+        # kontrolleren ber om. Hoppes over når ønsket horisontal kraft er null
         if tau[0] != 0.0 or tau[1] != 0.0:
 
             Fx_desired = tau[0]
@@ -164,20 +167,22 @@ class ThrustAllocator:
             Fx_actual = z[1] + z[3]
             Fy_actual = z[0] + z[2] + z[4]
 
-            # Actual force must be parallel to desired force
+            # Kryssproduktet er null: allokert kraft er parallell med ønsket
             constraints.append(
                 direction_x * Fy_actual
                 - direction_y * Fx_actual == 0
             )
 
-            # Actual force must not point in the opposite direction
+            # Prikkproduktet er ikke negativt: allokert kraft peker samme vei
             constraints.append(
                 direction_x * Fx_actual
                 + direction_y * Fy_actual >= 0
             )
 
 
-        # Solve the constrained WLS problem
+        # OPTIMAL_INACCURATE godtas: det skjer når kravet er langt over
+        # kapasiteten (for eksempel Sim 7 ved 24 m/s), og løsningen er da
+        # fortsatt brukbar
         problem = cp.Problem(objective, constraints)
         try:
             problem.solve(solver=cp.CLARABEL)
@@ -189,8 +194,7 @@ class ThrustAllocator:
             z = z.value
             self.z_prev = z.copy()
         else:
-            # Fallback: reuse the previous allocation for this step instead
-            # of stopping the whole simulation
+            # Gjenbruk forrige løsning i dette ene tidssteget
             print(f"t = {t:.1f} s: allocation status {problem.status}, "
                   "previous solution reused")
             z = self.z_prev.copy()
@@ -204,14 +208,16 @@ class ThrustAllocator:
         Fx2 = z[3]
         Fy2 = z[4]
 
-        # Azimuth commands:
-        # - angle: desired force direction, or the reversed direction if that
-        #   needs less rotation; held at the current angle for small forces
-        #   (below u_dead), where the direction is not worth slewing for.
-        # - thrust: projection of the desired force onto the CURRENT azimuth
-        #   direction. The thruster therefore never pushes in a wrong direction,
-        #   neither in the dead zone nor while slewing, and the force builds up
-        #   as the azimuth turns towards the commanded angle.
+        # Fra kraftvektor til azimuth-kommando:
+        # - Vinkel: retningen til kraften, eller den motsatte (med negativ
+        #   thrust) hvis den ligger nærmere gjeldende vinkel. Azimuthene dreier
+        #   bare 12 grader/s, så korteste rotasjon betyr mye.
+        # - Under u_dead = 0.5 kN holdes vinkelen, fordi retningen til en nesten
+        #   null kraft bare er numerisk støy og ikke verdt å dreie etter.
+        # - Thrust: kraften projiseres på GJELDENDE vinkel. Første versjon ga
+        #   full thrust langs den fastholdte vinkelen, som skjøv i feil retning
+        #   og ga +-13 kNm chattering i yaw i Sim 2. Med projeksjonen skyver
+        #   thrusteren aldri feil vei, og kraften bygges opp mens den dreier.
         u_dead = 0.5  # [kN]
         u_az = []
         alpha_az = []
@@ -226,18 +232,18 @@ class ThrustAllocator:
                   < abs(normalize_angle(a_cmd - a_now))):
                 a_cmd = normalize_angle(a_cmd + np.pi)
 
-            # Signed thrust along the current azimuth direction
+            # Fortegnsbestemt thrust langs vinkelen thrusteren faktisk har nå
             u_az.append(Fx * np.cos(a_now) + Fy * np.sin(a_now))
             alpha_az.append(a_cmd)
 
         u_1, u_2 = u_az
         alpha_1, alpha_2 = alpha_az
 
-        # Create thrust and azimuth commands
+        # Tunnelen står fast på pi/2 (tverrskips), så bare thrusten varierer
         u_cmd = np.array([u_T, u_1, u_2])
         alpha_cmd = np.array([np.pi / 2, alpha_1, alpha_2])
 
-        # Convert thrust commands from kN back to N
+        # Simulatoren forventer thrust i N
         u_cmd = u_cmd * 1000.0
 
         return u_cmd, alpha_cmd
