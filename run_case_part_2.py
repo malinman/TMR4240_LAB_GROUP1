@@ -184,6 +184,38 @@ def standard_plots(logs, *, setpoints=False, observer=False, environment_plots=F
         plot_current(logs)
         plot_waves(logs)
 
+def plot_yaw_diagnostics(logs, title):
+    """Heading, commanded vs. applied yaw moment and the P, I and D
+    contributions of the heading controller. Also prints a short summary."""
+    t = logs.t
+    res_mz = (logs.tau_d[:, 5] - logs.tau_thr[:, 5]) / 1e3
+
+    fig, ax = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+    ax[0].plot(t, np.degrees(logs.cmd[:, 5]), "--", label="commanded set-point")
+    ax[0].plot(t, np.degrees(logs.sp[:, 5]), label="reference")
+    ax[0].plot(t, np.degrees(logs.eta[:, 5]), label="actual")
+    ax[0].set_ylabel("heading [deg]")
+    ax[1].plot(t, logs.tau_d[:, 5] / 1e3, label="commanded $M_z$ (controller)")
+    ax[1].plot(t, logs.tau_thr[:, 5] / 1e3, "--", label="applied $M_z$ (thrusters)")
+    ax[1].plot(t, res_mz, ":", label="residual $M_z$")
+    ax[1].set_ylabel("yaw moment [kNm]")
+    ax[2].plot(t, logs.tau_P[:, 5] / 1e3, label="P")
+    ax[2].plot(t, logs.tau_I[:, 5] / 1e3, label="I")
+    ax[2].plot(t, logs.tau_D[:, 5] / 1e3, label="D")
+    ax[2].set_ylabel("yaw contributions [kNm]")
+    ax[2].set_xlabel("Time [s]")
+    for a in ax:
+        a.grid(alpha=0.3)
+        a.legend(fontsize=8)
+    fig.suptitle(title)
+    fig.tight_layout()
+
+    print(f"[{title}] max |Mz cmd| = {np.abs(logs.tau_d[:, 5]).max()/1e3:.1f} kNm, "
+          f"max |I| = {np.abs(logs.tau_I[:, 5]).max()/1e3:.1f} kNm, "
+          f"max |residual| = {np.abs(res_mz).max():.1f} kNm, "
+          f"time |residual| > 5 kNm = {100*np.mean(np.abs(res_mz) > 5):.1f} %")
+    return fig
+
 
 # ---------------------------------------------------------------------------
 # Mandatory simulations
@@ -240,6 +272,7 @@ def sim2():
 #her stopper test figuren
     standard_plots(logs, setpoints=True)
 
+    plot_yaw_diagnostics(logs, "Sim 2 — yaw controller (four-corner, no environment)")
     #lagre bildene direkte
     output_dir = Path("simulation_results") / "sim2"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +295,7 @@ def sim3():
     cfg = Part2SimConfig(dt=DT, T=5 * hold, use_observer=False)
     logs = run(cfg, four_corner_commands(cfg, hold), environment())
     standard_plots(logs, setpoints=True, environment_plots=True)
+    plot_yaw_diagnostics(logs, "Sim 3 — yaw controller (four-corner, environment, raw feedback)")
     #lagre bildene dirkete
     output_dir = Path("simulation_results") / "sim3"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -336,6 +370,7 @@ def sim4():
         standard_plots(logs, setpoints=True, observer=use_obs)
         plt.gcf().suptitle(f"Closed loop — {label}")
         out[("closed loop", label)] = logs
+        plot_yaw_diagnostics(logs, f"Sim 4c — yaw controller, {label}")
     save_figures()
     return out
 
@@ -446,6 +481,7 @@ def sim6():
     cfg = Part2SimConfig(dt=DT, T=1000.0, use_observer=True, observer_type=selected_observer())
     logs = run(cfg, np.zeros(6), environment(hs=ROBUST_HS, tp=ROBUST_TP))
     standard_plots(logs, setpoints=True, observer=True)
+    plot_yaw_diagnostics(logs, "Sim 6 — yaw controller (heavy sea, NPO)")
 
     # Design-sea reference with the same observer and controller (= Sim 4c),
     # evaluated over a window of the same length (500 s) as the heavy-sea run
@@ -513,6 +549,7 @@ def sim7():
     u_max = np.array([th.u_max for th in default_thrusters_part_2()])
     rows = []
     worst_logs = None
+    strongest_logs = {}
 
     for dir_deg in SIM7_DIRECTIONS_DEG:
         direction = np.deg2rad(dir_deg)
@@ -531,6 +568,8 @@ def sim7():
                   f"U_T mean {r['UT_mean']:5.1f} % (max {r['UT_max']:5.1f} %), "
                   f"at limit {r['sat_any']:5.1f} % (tunnel {r['sat_tunnel']:5.1f} %), "
                   f"residual rms Fy {r['res_Fy']:.2f} kN, Mz {r['res_Mz']:.1f} kNm")
+            if wind_speed == SIM7_WIND_SPEEDS[-1]:
+                strongest_logs[dir_deg] = logs
             if dir_deg == SIM7_DIRECTIONS_DEG[-1] and wind_speed == SIM7_WIND_SPEEDS[-1]:
                 worst_logs = logs
 
@@ -567,6 +606,10 @@ def sim7():
                            f"U_w = {SIM7_WIND_SPEEDS[-1]:.0f} m/s")
         plot_wrench_residual(worst_logs)
         plot_thruster_setpoints(worst_logs)
+
+    for dir_deg, lg in strongest_logs.items():
+        plot_yaw_diagnostics(lg, f"Sim 7 — yaw controller, from {dir_deg:.0f} deg, "
+                                 f"U_w = {SIM7_WIND_SPEEDS[-1]:.0f} m/s")
 
     #lagre bildene direkte
     output_dir = Path("simulation_results") / "sim7"
