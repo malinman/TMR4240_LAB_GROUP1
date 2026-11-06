@@ -15,7 +15,8 @@ dependencies = [
     "mcsimpy @ git+https://github.com/NTNU-MCS/mcsimpy.git@55af1b363c33abe1bcbb6c35bcea39f108d3ce17",
     "notebook",
     "pytest",
+    "cvxpy"
 ]
 
 [tool.setuptools]
-packages = ["models", "simulation", "part_1"]
+packages = ["models", "simulation", "part_1", "part_2"]
